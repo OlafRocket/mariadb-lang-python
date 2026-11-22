@@ -113,6 +113,11 @@ class Item_sum_py_agg : public Item_sum_plugin,
   */
   struct State
   {
+    /*
+      Thread state of this statement; see py_thread_pin.h.  First member:
+      destroyed last, after ~State() released the Python references.
+    */
+    Py_thread_pin pin;
     std::vector<Rowsink_column> cols;
     size_t rows= 0;
     unsigned long long bytes= 0;

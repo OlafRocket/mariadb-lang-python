@@ -151,7 +151,7 @@ PyObject *Item_func_py_call::execute(bool &out_owns)
 
   /* Fresh isolated namespace: prevents leakage between calls */
   PyObject *globals= PyDict_New();
-  PyDict_SetItemString(globals, "__builtins__", PyEval_GetBuiltins());
+  PyDict_SetItem(globals, py_name.builtins, PyEval_GetBuiltins());
 
   /* Marshal SQL args (NULL → None): named globals or the args tuple */
   if (entry->has_params)
@@ -159,7 +159,7 @@ PyObject *Item_func_py_call::execute(bool &out_owns)
     for (uint i= 0; i < n_data; i++)
     {
       PyObject *v= marshal_arg(args[i + 1], lang_python_use_numpy());
-      PyDict_SetItemString(globals, entry->params[i].c_str(), v);
+      PyDict_SetItem(globals, entry->param_objs[i], v);
       Py_DECREF(v);
     }
   }
@@ -169,7 +169,7 @@ PyObject *Item_func_py_call::execute(bool &out_owns)
     for (uint i= 0; i < n_data; i++)
       PyTuple_SET_ITEM(tuple, i,
                        marshal_arg(args[i + 1], lang_python_use_numpy()));
-    PyDict_SetItemString(globals, "args", tuple);
+    PyDict_SetItem(globals, py_name.args, tuple);
     Py_DECREF(tuple);
   }
 
@@ -180,7 +180,7 @@ PyObject *Item_func_py_call::execute(bool &out_owns)
     Py_DECREF(run_ret);
 
     /* Level 5: result absent or None → SQL NULL, no warning */
-    result_obj= PyDict_GetItemString(globals, "result");  /* borrowed */
+    result_obj= PyDict_GetItem(globals, py_name.result);  /* borrowed */
     if (!result_obj || result_obj == Py_None)
     {
       result_obj= nullptr;

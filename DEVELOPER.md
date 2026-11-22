@@ -19,6 +19,7 @@ layout, the development loop and the tests.
 | `py_columns.cc`, `.h` | Column buffer to numpy array conversion, shared by `query_array` and `py_agg` |
 | `marshal.cc`, `unmarshal.cc` | SQL value to Python object and back, for scalar calls |
 | `py_numpy.h` | The one include for the numpy C API; every source file that uses numpy includes it |
+| `py_thread_pin.h`, `py_thread_pin.cc` | `Py_thread_pin`: keeps the Python thread state of a server thread for the duration of a statement |
 | `mysql-test/lang_python/` | MTR suite |
 | `bench/` | Benchmark harness ([bench/README.md](bench/README.md)) |
 | `docs/` | Design notes |
@@ -31,6 +32,17 @@ layout, the development loop and the tests.
 | [docs/NAMED_FUNCTIONS.md](docs/NAMED_FUNCTIONS.md) | Named functions and the catalog |
 | [docs/BULK_DATA.md](docs/BULK_DATA.md) | `query_array` and `py_agg` |
 | [docs/AGGREGATE_PROTOCOL.md](docs/AGGREGATE_PROTOCOL.md) | Python aggregates (`step` / `finalize`) |
+
+## GIL and thread state
+
+| Rule | Detail |
+|---|---|
+| GIL per call | Every entry into Python is bracketed by `PyGILState_Ensure` / `PyGILState_Release`. The GIL is not held between calls. |
+| Thread state per statement | An item that calls Python owns a `Py_thread_pin`. `pin()` runs before the first `PyGILState_Ensure` of the item and creates the thread state (`PyGILState_Ensure` + `PyEval_SaveThread`); the item's `cleanup()` calls `unpin()`. Without the pin, each `Ensure` / `Release` pair creates and destroys a thread state. |
+| One pin per thread | `pin()` is a no-op on a thread that already has a thread state: a second Python item of the statement, or a statement run from Python through `inhost.sql`. |
+| Same thread | `pin()` and `unpin()` run on the same thread. The debug build asserts it. |
+| New items | A new item class that calls Python per row or per group holds a pin and releases it in `cleanup()`. |
+| Names | Names looked up on every call are interned once (`py_name` in `lang_python.h`; `PyFuncEntry::param_objs` for parameter names). Use `PyDict_SetItem` / `PyDict_GetItem` with them, not the C string variants, on per-call paths. |
 
 ## Build trees
 
@@ -75,6 +87,7 @@ several connections.
 | `py_query_array`, `py_query_array_threads` | `query_array`: types, NULLs, parameters, errors; KILL (also of `query`) and concurrent connections |
 | `py_agg`, `py_agg_threads` | `py_agg` with functions: types, DISTINCT, FILTER, windows, limits; KILL and concurrent connections |
 | `py_aggregate` | Python aggregates: chunking, kinds, errors, restart |
+| `py_thread_state` | Statement shapes that create and release the Python thread state: several Python items, subqueries, prepared statements, failing statements, stored procedure loops, nested statements through `inhost.sql` |
 
 Conventions:
 
@@ -91,6 +104,7 @@ Conventions:
 bench/run.sh -b <release-build-dir> -l before     # on the commit before
 bench/run.sh -b <release-build-dir> -l after      # on the change
 bench/compare.sh bench/results/before.csv bench/results/after.csv
+bench/concurrent.sh -b <release-build-dir> -l after   # throughput by connection count
 ```
 
 A change made for performance states its before and after figures from

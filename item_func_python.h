@@ -80,6 +80,9 @@ result = math.sqrt(args[0] ** 2 + args[1] ** 2)
   Thread safety:
     Interpreter initialised once at plugin load; GIL released after init.
     Each call re-acquires via PyGILState_Ensure / PyGILState_Release.
+    The Python thread state is created on the first call of the statement
+    and kept until cleanup() (Py_thread_pin); the GIL is not held between
+    calls.
 */
 
 #include <Python.h>
@@ -92,6 +95,7 @@ result = math.sqrt(args[0] ** 2 + args[1] ** 2)
 #include "lang_python.h"
 #include "marshal.h"
 #include "unmarshal.h"
+#include "py_thread_pin.h"
 
 #include <string>
 
@@ -217,6 +221,7 @@ public:
 
   bool fix_length_and_dec(THD *) override;
   LEX_CSTRING func_name_cstring() const override;
+  void cleanup() override;
 
   double      real_op()    override;
   longlong    int_op()     override;
@@ -254,6 +259,7 @@ protected:
   void raise_python_error();
 
 private:
+  Py_thread_pin m_pin;                    /* thread state of this statement */
   Py_code_cache m_cache;
   /* Compile (or reuse) the code for src; nullptr with a Python exception
      set on a compile error.  Borrowed reference, valid until the next
@@ -317,7 +323,7 @@ public:
   PyObject *extract_result(PyObject *run_ret, PyObject *globals) override
   {
     Py_DECREF(run_ret);
-    return PyDict_GetItemString(globals, "result");
+    return PyDict_GetItem(globals, py_name.result);
   }
 
   Item *shallow_copy(THD *thd) const override

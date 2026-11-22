@@ -11,7 +11,8 @@ change can be compared against the commit before it.
 | `cases.sql` | The cases, one SQL statement each |
 | `setup.sql` | Fixtures: schema `bench`, three tables, the named functions the cases call |
 | `compare.sh` | Compares the CSVs of two runs |
-| `results/` | CSVs written by `run.sh` (not tracked by git; timings are machine-specific) |
+| `concurrent.sh` | Runs the per-row `py_call` statement from several connections at once; prints total throughput per connection count |
+| `results/` | CSVs written by `run.sh` and `concurrent.sh` (not tracked by git; timings are machine-specific) |
 
 ## Running
 
@@ -50,6 +51,32 @@ bench/compare.sh bench/results/before.csv bench/results/after.csv
 ```
 
 `speedup` is before / after: above 1 means the second run is faster.
+
+## Concurrent connections
+
+```bash
+bench/concurrent.sh -b <build-dir>
+bench/concurrent.sh -b <build-dir> -j "1 2 4 8 16" -r 200000 -l after
+```
+
+| Option | Meaning | Default |
+|---|---|---|
+| `-b BUILD_DIR` | Start a server from this build tree | none: use a running server (client options after `--`) |
+| `-j LIST` | Connection counts to run | `1 2 4 8` |
+| `-n RUNS` | Repetitions per connection count; the median is reported | 3 |
+| `-r ROWS` | Rows scanned by each connection | 100000 |
+| `-l LABEL` | Label of the run | git short hash |
+| `-o DIR` | Directory for the CSV | `bench/results` |
+
+Every connection runs `SELECT SUM(py_call('bench_double', x))` over
+`ROWS` rows. The wall time from the start of the first client to the end
+of the last is measured on the client side. Output: a table and
+`results/LABEL-concurrent.csv` with `connections`, `median_s`,
+`rows_per_s` (total over all connections) and `us_per_row`.
+
+The Python bodies of all connections share the GIL. Flat `rows_per_s`
+across connection counts is the expected best case; a fall is the cost of
+handing the GIL between threads.
 Differences of a few percent between runs of the same code are noise;
 the `min_s` and `max_s` columns show the spread within a run.
 

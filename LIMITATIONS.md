@@ -24,6 +24,20 @@ their own sections below.
   Addressed by Phase 4 (free-threaded CPython; subinterpreters are the
   fallback, limited by numpy not supporting PEP 684).
 
+- **Per-row calls from several connections slow each other down.**  Every
+  call takes and releases the GIL, and a contended handover costs more
+  than the call itself: measured, the total throughput of a per-row
+  `py_call` statement falls from 1.3 million rows per second with one
+  connection to about 0.22 million with eight.  The batch forms (`py_agg`,
+  `inhost.sql.query_array`) call Python once per group or chunk and are
+  not affected to that degree.
+
+- **Python per-thread state within a statement is unspecified.**  The
+  Python thread state is kept from the first Python call of a statement
+  to its end, so `threading.local` data and context variables set by one
+  call can be visible to the following calls of the same statement.
+  They never outlive the statement.  Do not rely on either behaviour.
+
 - **A runaway Python call blocks the whole server's Python, not just its own
   connection.**  Because of the single GIL, an infinite loop or a
   long-running `py_exec` holds the GIL and stalls every other connection's
@@ -31,8 +45,8 @@ their own sections below.
   to interrupt a call.
 
 - **`py_eval` compiles its expression on every call**, so per-row use
-  pays the parse and compile cost for every row (about 40 µs per row
-  measured, against about 10 µs for `py_exec` and `py_call`).  This is
+  pays the parse and compile cost for every row (about 23 µs per row
+  measured, against about 0.55 µs for `py_exec` and `py_call`).  This is
   deliberate: `py_eval` is the one-off form.  `py_exec` compiles once per
   statement and reuses the code for the following rows; named functions
   compile once at create time.  For per-row work use `py_exec` or a

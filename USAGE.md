@@ -655,7 +655,9 @@ The Python interpreter is initialized once when the plugin loads and shared
 across all connections.  The GIL (Global Interpreter Lock) is acquired per
 SQL function call via `PyGILState_Ensure()` and released afterward.
 Python calls are therefore serialized, but SQL processing between calls
-is fully parallel.
+is fully parallel.  The Python thread state of a connection is created by
+the first Python call of a statement and released when the statement
+ends; the GIL is not held between calls.
 
 ### Error handling
 

@@ -144,7 +144,7 @@ TARGET_INCLUDE_DIRECTORIES(python3_bundled INTERFACE
 # ---------------------------------------------------------------------------
 MYSQL_ADD_PLUGIN(lang_python plugin.cc lang_python.cc item_func_python.cc
   item_func_py_named.cc py_func_catalog.cc py_inhost_module.cc
-  py_inhost_rowsink.cc py_columns.cc item_sum_py_agg.cc
+  py_inhost_rowsink.cc py_columns.cc item_sum_py_agg.cc py_thread_pin.cc
   marshal.cc unmarshal.cc
   RECOMPILE_FOR_EMBEDDED MODULE_ONLY COMPONENT Server
   LINK_LIBRARIES python3_bundled ${CMAKE_DL_LIBS} m Threads::Threads

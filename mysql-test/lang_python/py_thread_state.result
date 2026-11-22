@@ -1,0 +1,168 @@
+#
+# Python thread state kept for the duration of a statement
+# (Py_thread_pin): statement shapes that create and release it.
+#
+CREATE TABLE t1 (id INT NOT NULL PRIMARY KEY, grp INT NOT NULL);
+INSERT INTO t1 VALUES (1, 1), (2, 1), (3, 2), (4, 2), (5, 2);
+SELECT py_create_function('twice', 'INT', 'x', 'result = x * 2');
+py_create_function('twice', 'INT', 'x', 'result = x * 2')
+1
+SELECT py_create_function('total', 'INT', 'x', 'result = int(x.sum())');
+py_create_function('total', 'INT', 'x', 'result = int(x.sum())')
+1
+SELECT py_create_aggregate('running', 'INT', 'x', '
+class Aggregate:
+    def __init__(self):
+        self.total = 0
+    def step(self, x):
+        self.total += int(x.sum())
+    def finalize(self):
+        return self.total
+');
+py_create_aggregate('running', 'INT', 'x', '
+class Aggregate:
+    def __init__(self):
+        self.total = 0
+    def step(self, x):
+        self.total += int(x.sum())
+    def finalize(self):
+        return self.total
+')
+1
+# --- several rows, several Python items in one statement ---
+SELECT id, py_eval('args[0] + 1', 'INT', id) AS e,
+py_exec('result = args[0] * 10', 'INT', id) AS x,
+py_call('twice', id) AS c
+FROM t1 ORDER BY id;
+id	e	x	c
+1	2	10	2
+2	3	20	4
+3	4	30	6
+4	5	40	8
+5	6	50	10
+# --- Python item in WHERE and in the select list ---
+SELECT id, py_call('twice', id) AS c FROM t1
+WHERE py_exec('result = args[0] % 2', 'INT', id) = 1 ORDER BY id;
+id	c
+1	2
+3	6
+5	10
+# --- subquery and derived table ---
+SELECT id FROM t1
+WHERE py_call('twice', id) IN (SELECT py_call('twice', id) FROM t1 WHERE grp = 2)
+ORDER BY id;
+id
+3
+4
+5
+SELECT SUM(c) FROM (SELECT py_call('twice', id) AS c FROM t1) d;
+SUM(c)
+30
+# --- prepared statement executed several times ---
+PREPARE st FROM "SELECT SUM(py_call('twice', id)) AS s FROM t1 WHERE id <= ?";
+EXECUTE st USING 2;
+s
+6
+EXECUTE st USING 5;
+s
+30
+EXECUTE st USING 3;
+s
+12
+DEALLOCATE PREPARE st;
+# --- a statement that fails in the middle of the scan, then a normal one ---
+SELECT py_exec('result = 10 // (3 - args[0])', 'INT', id) FROM t1 ORDER BY id;
+ERROR HY000: py_exec: ZeroDivisionError: division by zero
+SELECT SUM(py_exec('result = args[0]', 'INT', id)) AS s FROM t1;
+s
+15
+SELECT py_call('twice', id), py_eval('10 // (3 - args[0])', 'INT', id) FROM t1 ORDER BY id;
+ERROR HY000: py_eval: ZeroDivisionError: division by zero
+SELECT SUM(py_call('twice', id)) AS s FROM t1;
+s
+30
+# --- aggregates: per group, with a scalar Python item beside them ---
+SELECT grp, py_agg('total', id) AS a, py_agg('running', id) AS r,
+py_call('twice', grp) AS c
+FROM t1 GROUP BY grp ORDER BY grp;
+grp	a	r	c
+1	3	3	2
+2	12	12	4
+SELECT id, py_agg('total', id) OVER (PARTITION BY grp ORDER BY id) AS w
+FROM t1 ORDER BY id;
+id	w
+1	1
+2	3
+3	3
+4	7
+5	12
+# --- a failing aggregate, then a normal one ---
+SELECT py_create_function('bad_total', 'INT', 'x', 'result = 1 // 0');
+py_create_function('bad_total', 'INT', 'x', 'result = 1 // 0')
+1
+SELECT grp, py_agg('bad_total', id) FROM t1 GROUP BY grp;
+ERROR HY000: py_agg: ZeroDivisionError: division by zero
+SELECT py_agg('total', id) AS a FROM t1;
+a
+15
+# --- stored procedure: the same statement in a loop ---
+CREATE PROCEDURE p1()
+BEGIN
+DECLARE i INT DEFAULT 0;
+DECLARE s INT DEFAULT 0;
+DECLARE v INT;
+WHILE i < 3 DO
+SELECT SUM(py_call('twice', id)) INTO v FROM t1;
+SET s= s + v + py_eval('args[0]', 'INT', i);
+SET i= i + 1;
+END WHILE;
+SELECT s;
+END|
+CALL p1();
+s
+93
+CALL p1();
+s
+93
+DROP PROCEDURE p1;
+# --- nested: a Python body runs a statement that calls Python per row ---
+SELECT py_exec('
+import inhost
+rows = inhost.sql.query("SELECT SUM(py_call(\'twice\', id)) FROM test.t1")
+result = int(rows[0][0])
+', 'INT') AS nested;
+nested
+30
+SELECT id, py_exec('
+import inhost
+rows = inhost.sql.query(
+    "SELECT SUM(py_call(\'twice\', id)) FROM test.t1 WHERE id <= %s", (args[0],))
+result = int(rows[0][0])
+', 'INT', id) AS nested
+FROM t1 ORDER BY id;
+id	nested
+1	2
+2	6
+3	12
+4	20
+5	30
+# --- constant items, no table ---
+SELECT py_call('twice', 21), py_eval('1 + 1', 'INT');
+py_call('twice', 21)	py_eval('1 + 1', 'INT')
+42	2
+DO py_call('twice', 1);
+# --- cleanup ---
+SELECT py_drop_function('twice');
+py_drop_function('twice')
+1
+SELECT py_drop_function('total');
+py_drop_function('total')
+1
+SELECT py_drop_function('running');
+py_drop_function('running')
+1
+SELECT py_drop_function('bad_total');
+py_drop_function('bad_total')
+1
+DROP TABLE t1;
+DROP TABLE mysql.lang_python_func;

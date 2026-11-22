@@ -196,6 +196,20 @@ Done:
   text is unchanged. Dedent runs once with it. Measured: 48.9 to 10.0 µs
   per row for a one-line body, 81.7 to 11.0 µs for a multi-line body.
   `py_exec` is now level with `py_call`.
+- Python thread state kept for the statement (`Py_thread_pin`) and
+  interned strings for the names looked up on every call (`__builtins__`,
+  `args`, `result`, the parameter names of a named function). Before,
+  every call created and destroyed a Python thread state. Measured
+  together: `py_call` 9.4 to 0.53 µs per row, `py_exec` 10.0 to 0.58 µs,
+  `py_eval` 42 to 23 µs, indexed `inhost.sql` point query 77 to 58 µs.
+  The GIL is taken and released per call as before.
+
+Decisions on the thread state:
+
+| Decision | Reason |
+|---|---|
+| The thread state lives for one statement, not for the server thread. | Nothing of Python's per-thread state outlives the statement. Under the thread pool a server thread serves several connections; a state kept per thread would carry one session's thread-local data into another. |
+| The GIL is not held between calls. | Holding it for the statement would block the Python code of every other connection for that long. |
 
 Decisions on the compile cache:
 
@@ -210,14 +224,29 @@ Current figures:
 | Path | Cost |
 |---|---|
 | Native SQL expression | 0.13 µs per row |
-| `py_exec`, `py_call` | About 10 µs per row |
-| `py_eval` | About 40 µs per row |
-| `inhost.sql` indexed point query | About 75 µs per call |
+| `py_exec`, `py_call` | About 0.55 µs per row |
+| `py_eval` | About 23 µs per row |
+| `inhost.sql` indexed point query | About 58 µs per call |
+
+Concurrent connections running the per-row `py_call` statement
+(`bench/concurrent.sh`, total rows per second):
+
+| Connections | Before the thread state change | After |
+|---|---|---|
+| 1 | 102,000 | 1,300,000 |
+| 2 | 64,000 | 638,000 |
+| 4 | 66,000 | 280,000 |
+| 8 | 66,000 | 223,000 |
 
 Open:
 
-- Per-row overhead of scalar calls. Candidates: the fresh namespace per
-  row, GIL acquire and release per row.
+- GIL handover under concurrency. The total throughput of per-row calls
+  falls as connections are added (table above): every row takes and
+  releases the GIL, and a contended handover costs more than the call.
+  Candidate: keep the GIL for a bounded number of rows.
+- Remaining per-row overhead of scalar calls. Candidates: the fresh
+  namespace per row; calling a prebuilt function object in `py_call`
+  instead of evaluating the module code.
 - Internal session per `inhost.sql` call. Candidate: THD reuse.
 - Callables resolved once at plugin start (`textwrap.dedent`, which
   `py_eval` still looks up per call) and heavy modules imported once

@@ -45,6 +45,23 @@ PyObject *lang_python_dedent_source(const char *src);
    into buf and clear the exception state. */
 void lang_python_format_exc(const char *prefix, char *buf, size_t buflen);
 
+/*
+  Interned Python strings for the names the plugin looks up on every call.
+  Created at plugin init, released at deinit; borrowed by all users.
+  Dict access with these objects skips the per-call decoding and interning
+  that the C string variants (PyDict_SetItemString, ...) perform.
+*/
+struct Lang_python_names
+{
+  PyObject *builtins;                     /* "__builtins__" */
+  PyObject *args;                         /* "args"         */
+  PyObject *result;                       /* "result"       */
+  PyObject *aggregate;                    /* "Aggregate"    */
+  PyObject *step;                         /* "step"         */
+  PyObject *finalize;                     /* "finalize"     */
+};
+extern Lang_python_names py_name;
+
 int lang_python_init(void *);
 int lang_python_deinit(void *);
 

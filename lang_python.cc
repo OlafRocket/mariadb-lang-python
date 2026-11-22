@@ -42,6 +42,31 @@
 static PyThreadState *main_tstate= nullptr;
 static bool numpy_available= false;
 
+Lang_python_names py_name;
+
+/* GIL held.  true = failure. */
+static bool create_names()
+{
+  py_name.builtins=  PyUnicode_InternFromString("__builtins__");
+  py_name.args=      PyUnicode_InternFromString("args");
+  py_name.result=    PyUnicode_InternFromString("result");
+  py_name.aggregate= PyUnicode_InternFromString("Aggregate");
+  py_name.step=      PyUnicode_InternFromString("step");
+  py_name.finalize=  PyUnicode_InternFromString("finalize");
+  return !py_name.builtins || !py_name.args || !py_name.result ||
+         !py_name.aggregate || !py_name.step || !py_name.finalize;
+}
+
+static void release_names()
+{
+  Py_CLEAR(py_name.builtins);
+  Py_CLEAR(py_name.args);
+  Py_CLEAR(py_name.result);
+  Py_CLEAR(py_name.aggregate);
+  Py_CLEAR(py_name.step);
+  Py_CLEAR(py_name.finalize);
+}
+
 
 /* -------------------------------------------------------------------------
    System variables
@@ -305,6 +330,15 @@ int lang_python_init(void * /* unused */)
     return 1;
   }
 
+  if (create_names())
+  {
+    PyErr_Clear();
+    release_names();
+    sql_print_error("lang_python: failed to create the interned names");
+    Py_Finalize();
+    return 1;
+  }
+
   numpy_available= true;
 
   sql_print_information("lang_python: Python %d.%d initialised, numpy available",
@@ -343,6 +377,7 @@ int lang_python_deinit(void * /* unused */)
   }
 
   numpy_available= false;
+  release_names();
   Py_Finalize();
   return 0;
 }

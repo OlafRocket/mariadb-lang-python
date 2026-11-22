@@ -49,6 +49,7 @@ struct PyFuncEntry
   std::string return_type;     /* canonical: INT|DOUBLE|VARCHAR|DECIMAL|BOOL|BLOB */
   std::string param_names;     /* raw comma list; empty in args[] mode */
   std::vector<std::string> params;  /* parsed names; empty in args[] mode */
+  std::vector<PyObject *> param_objs;  /* params as interned str; strong refs */
   bool        has_params= false;
   bool        strict_errors= true;
   bool        is_aggregate= false;  /* kind 'aggregate': body defines class
@@ -58,7 +59,7 @@ struct PyFuncEntry
   PyObject   *code= nullptr;   /* compiled body (module code); strong ref */
 
   PyFuncEntry() = default;
-  ~PyFuncEntry();              /* GIL-safe Py_DECREF of code */
+  ~PyFuncEntry();              /* GIL-safe Py_DECREF of code, param_objs */
   PyFuncEntry(const PyFuncEntry &) = delete;
   PyFuncEntry &operator=(const PyFuncEntry &) = delete;
 };

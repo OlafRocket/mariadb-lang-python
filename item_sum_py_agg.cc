@@ -171,6 +171,7 @@ Item_sum_py_agg::State *Item_sum_py_agg::state()
   if (!m_state)
   {
     m_state.reset(new State);
+    m_state->pin.pin();
     m_state->max_bytes= lang_python_agg_max_mem(current_thd);
     m_state->chunk_rows= lang_python_agg_chunk_rows(current_thd);
     m_state->cols.resize(n_data());
@@ -366,18 +367,18 @@ PyObject *Item_sum_py_agg::call_python(State *st)
   PyObject *globals= PyDict_New();
   if (!globals)
     return nullptr;
-  PyDict_SetItemString(globals, "__builtins__", PyEval_GetBuiltins());
+  PyDict_SetItem(globals, py_name.builtins, PyEval_GetBuiltins());
 
   PyObject *tuple= build_args(st);
   bool ok= tuple != nullptr;
   if (ok && m_entry->has_params)
   {
     for (uint i= 0; ok && i < n_data(); i++)
-      ok= PyDict_SetItemString(globals, m_entry->params[i].c_str(),
-                               PyTuple_GET_ITEM(tuple, i)) == 0;
+      ok= PyDict_SetItem(globals, m_entry->param_objs[i],
+                         PyTuple_GET_ITEM(tuple, i)) == 0;
   }
   else if (ok)
-    ok= PyDict_SetItemString(globals, "args", tuple) == 0;
+    ok= PyDict_SetItem(globals, py_name.args, tuple) == 0;
   Py_XDECREF(tuple);
 
   PyObject *result= nullptr;
@@ -387,7 +388,7 @@ PyObject *Item_sum_py_agg::call_python(State *st)
     if (run_ret)
     {
       Py_DECREF(run_ret);
-      result= PyDict_GetItemString(globals, "result");   /* borrowed */
+      result= PyDict_GetItem(globals, py_name.result);   /* borrowed */
       if (result == Py_None)
         result= nullptr;
       Py_XINCREF(result);
@@ -425,14 +426,14 @@ bool Item_sum_py_agg::step_chunk(State *st)
     ok= st->ns != nullptr;
     if (ok)
     {
-      PyDict_SetItemString(st->ns, "__builtins__", PyEval_GetBuiltins());
+      PyDict_SetItem(st->ns, py_name.builtins, PyEval_GetBuiltins());
       PyObject *run_ret= PyEval_EvalCode(m_entry->code, st->ns, st->ns);
       ok= run_ret != nullptr;
       Py_XDECREF(run_ret);
     }
     if (ok)
     {
-      st->cls= PyDict_GetItemString(st->ns, "Aggregate");   /* borrowed */
+      st->cls= PyDict_GetItem(st->ns, py_name.aggregate);   /* borrowed */
       if (!st->cls || !PyCallable_Check(st->cls))
       {
         st->cls= nullptr;
@@ -451,7 +452,7 @@ bool Item_sum_py_agg::step_chunk(State *st)
   if (ok)
   {
     PyObject *tuple= build_args(st);
-    PyObject *step= tuple ? PyObject_GetAttrString(st->inst, "step") : nullptr;
+    PyObject *step= tuple ? PyObject_GetAttr(st->inst, py_name.step) : nullptr;
     PyObject *ret= step ? PyObject_CallObject(step, tuple) : nullptr;
     ok= ret != nullptr;
     Py_XDECREF(ret);
@@ -481,7 +482,7 @@ PyObject *Item_sum_py_agg::finalize_group(State *st)
   if (st->failed || !st->inst)
     return nullptr;
 
-  PyObject *result= PyObject_CallMethod(st->inst, "finalize", nullptr);
+  PyObject *result= PyObject_CallMethodNoArgs(st->inst, py_name.finalize);
   if (!result)
   {
     report_python_error();

@@ -225,7 +225,7 @@ PyObject *Item_func_python_base::execute(bool &out_owns)
 
   /* Fresh isolated namespace: prevents leakage between calls */
   PyObject *globals= PyDict_New();
-  PyDict_SetItemString(globals, "__builtins__", PyEval_GetBuiltins());
+  PyDict_SetItem(globals, py_name.builtins, PyEval_GetBuiltins());
 
   /*
     Level 3: data args (args[2+]): NULL becomes Python None.
@@ -238,7 +238,7 @@ PyObject *Item_func_python_base::execute(bool &out_owns)
     PyTuple_SET_ITEM(tuple, i,
                      marshal_arg(args[i + 2],
                                  lang_python_use_numpy()));
-  PyDict_SetItemString(globals, "args", tuple);
+  PyDict_SetItem(globals, py_name.args, tuple);
   Py_DECREF(tuple);
 
   /*
@@ -310,14 +310,23 @@ PyObject *Item_func_python_base::execute(bool &out_owns)
 }
 
 
+void Item_func_python_base::cleanup()
+{
+  m_pin.unpin();
+  Item_func_hybrid_field_type::cleanup();
+}
+
+
 /* -------------------------------------------------------------------------
    *_op() methods: called by Item_func_hybrid_field_type's val_*().
-   Each acquires the GIL, calls execute(), converts.
+   Each acquires the GIL, calls execute(), converts.  The pin keeps the
+   thread state between calls, so only the first call creates it.
    Level 6 (type conversion failure) is handled per-method.
    ------------------------------------------------------------------------- */
 
 double Item_func_python_base::real_op()
 {
+  m_pin.pin();
   PyGILState_STATE gs= PyGILState_Ensure();
   null_value= false;
   bool owns;
@@ -330,6 +339,7 @@ double Item_func_python_base::real_op()
 
 longlong Item_func_python_base::int_op()
 {
+  m_pin.pin();
   PyGILState_STATE gs= PyGILState_Ensure();
   null_value= false;
   bool owns;
@@ -342,6 +352,7 @@ longlong Item_func_python_base::int_op()
 
 String *Item_func_python_base::str_op(String *str)
 {
+  m_pin.pin();
   PyGILState_STATE gs= PyGILState_Ensure();
   null_value= false;
   bool owns;
@@ -355,6 +366,7 @@ String *Item_func_python_base::str_op(String *str)
 
 my_decimal *Item_func_python_base::decimal_op(my_decimal *decimal_value)
 {
+  m_pin.pin();
   PyGILState_STATE gs= PyGILState_Ensure();
   null_value= false;
   bool owns;

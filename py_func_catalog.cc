@@ -61,10 +61,12 @@ PyFuncEntry::~PyFuncEntry()
     Skip entirely after Py_Finalize: the code object died with the
     interpreter.
   */
-  if (code && Py_IsInitialized())
+  if ((code || !param_objs.empty()) && Py_IsInitialized())
   {
     PyGILState_STATE gs= PyGILState_Ensure();
-    Py_DECREF(code);
+    Py_XDECREF(code);
+    for (PyObject *p : param_objs)
+      Py_XDECREF(p);
     PyGILState_Release(gs);
   }
 }
@@ -248,6 +250,23 @@ static PyFuncEntryPtr make_entry(const char *name, const char *return_type,
   e->strict_errors= strict;
   e->is_aggregate= aggregate;
   e->code= code;
+
+  /* The names as interned strings, for the per-call namespace setup */
+  if (e->has_params)
+  {
+    PyGILState_STATE gs= PyGILState_Ensure();
+    for (const std::string &p : e->params)
+    {
+      PyObject *o= PyUnicode_InternFromString(p.c_str());
+      if (!o)
+        PyErr_Clear();
+      e->param_objs.push_back(o);
+    }
+    PyGILState_Release(gs);
+    for (PyObject *o : e->param_objs)
+      if (!o)
+        return nullptr;                   /* out of memory */
+  }
   return e;
 }
 
@@ -321,8 +340,15 @@ static bool ensure_loaded_locked(char *errbuf, size_t errlen)
                         nm, cerr);
       continue;
     }
-    fresh.emplace(nm, make_entry(nm, rtype, params, std::move(plist),
-                                 strict, aggregate, code));
+    PyFuncEntryPtr entry= make_entry(nm, rtype, params, std::move(plist),
+                                     strict, aggregate, code);
+    if (!entry)
+    {
+      sql_print_warning("lang_python: skipping named function '%s': "
+                        "out of memory", nm);
+      continue;
+    }
+    fresh.emplace(nm, std::move(entry));
   }
   mysql_free_result(res);
   mysql_close(m);
@@ -395,6 +421,11 @@ bool py_catalog_create(const char *name, const char *return_type,
   PyFuncEntryPtr entry= make_entry(name, return_type, param_names,
                                    std::move(plist), strict_errors,
                                    aggregate, code);
+  if (!entry)
+  {
+    snprintf(errbuf, errlen, "out of memory");
+    return true;
+  }
 
   MYSQL *m= local_connect(errbuf, errlen);
   if (!m)
