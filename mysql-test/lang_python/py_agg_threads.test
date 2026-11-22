@@ -1,0 +1,77 @@
+--source include/have_sequence.inc
+
+--echo #
+--echo # py_agg: KILL during aggregation, concurrent use, catalog changes
+--echo #
+
+SELECT py_create_function('agg_sum', 'INT', 'x', 'result = int(x.sum())');
+SELECT py_create_function('agg_slow', 'INT', 'x', '
+import inhost
+inhost.sql.execute("INSERT INTO test.ready VALUES (1)")
+inhost.sql.query("SELECT SLEEP(1)")
+result = len(x)
+');
+CREATE TABLE ready (n INT);
+
+--echo # --- KILL QUERY while rows are being accumulated ---
+connect (con1,localhost,root,,test);
+let $id= `SELECT CONNECTION_ID()`;
+--send SELECT py_agg('agg_sum', seq + SLEEP(0.001)) AS s FROM seq_1_to_200000
+
+connection default;
+let $wait_condition= SELECT COUNT(*) = 1 FROM information_schema.processlist
+                     WHERE id = $id AND info LIKE 'SELECT py_agg%';
+--source include/wait_condition.inc
+--disable_query_log
+eval KILL QUERY $id;
+--enable_query_log
+
+connection con1;
+--error ER_QUERY_INTERRUPTED
+--reap
+SELECT py_agg('agg_sum', seq) AS usable_after_kill FROM seq_1_to_100;
+
+--echo # --- a function dropped while a group is being computed still finishes ---
+--send SELECT py_agg('agg_slow', seq) AS n FROM seq_1_to_10
+
+connection default;
+let $wait_condition= SELECT COUNT(*) = 1 FROM ready;
+--source include/wait_condition.inc
+SELECT py_drop_function('agg_slow');
+
+connection con1;
+--reap
+--error ER_UNKNOWN_ERROR
+SELECT py_agg('agg_slow', seq) FROM seq_1_to_10;
+
+--echo # --- four connections aggregate at the same time ---
+connect (con2,localhost,root,,test);
+connect (con3,localhost,root,,test);
+connect (con4,localhost,root,,test);
+
+connection con1;
+--send SELECT seq MOD 2 AS g, py_agg('agg_sum', seq) AS s, SUM(seq) AS expected FROM seq_1_to_400000 GROUP BY seq MOD 2 ORDER BY g
+connection con2;
+--send SELECT seq MOD 3 AS g, py_agg('agg_sum', seq) AS s, SUM(seq) AS expected FROM seq_1_to_300000 GROUP BY seq MOD 3 ORDER BY g
+connection con3;
+--send SELECT py_agg(DISTINCT 'agg_sum', seq MOD 1000) AS s FROM seq_1_to_200000
+connection con4;
+--send SELECT py_agg('agg_sum', seq) FILTER (WHERE seq MOD 2 = 0) AS s FROM seq_1_to_200000
+
+connection con1;
+--reap
+connection con2;
+--reap
+connection con3;
+--reap
+connection con4;
+--reap
+
+connection default;
+disconnect con1;
+disconnect con2;
+disconnect con3;
+disconnect con4;
+SELECT py_drop_function('agg_sum');
+DROP TABLE ready;
+DROP TABLE mysql.lang_python_func;

@@ -1,0 +1,77 @@
+#
+# py_agg: KILL during aggregation, concurrent use, catalog changes
+#
+SELECT py_create_function('agg_sum', 'INT', 'x', 'result = int(x.sum())');
+py_create_function('agg_sum', 'INT', 'x', 'result = int(x.sum())')
+1
+SELECT py_create_function('agg_slow', 'INT', 'x', '
+import inhost
+inhost.sql.execute("INSERT INTO test.ready VALUES (1)")
+inhost.sql.query("SELECT SLEEP(1)")
+result = len(x)
+');
+py_create_function('agg_slow', 'INT', 'x', '
+import inhost
+inhost.sql.execute("INSERT INTO test.ready VALUES (1)")
+inhost.sql.query("SELECT SLEEP(1)")
+result = len(x)
+')
+1
+CREATE TABLE ready (n INT);
+# --- KILL QUERY while rows are being accumulated ---
+connect  con1,localhost,root,,test;
+SELECT py_agg('agg_sum', seq + SLEEP(0.001)) AS s FROM seq_1_to_200000;
+connection default;
+connection con1;
+ERROR 70100: Query execution was interrupted
+SELECT py_agg('agg_sum', seq) AS usable_after_kill FROM seq_1_to_100;
+usable_after_kill
+5050
+# --- a function dropped while a group is being computed still finishes ---
+SELECT py_agg('agg_slow', seq) AS n FROM seq_1_to_10;
+connection default;
+SELECT py_drop_function('agg_slow');
+py_drop_function('agg_slow')
+1
+connection con1;
+n
+10
+SELECT py_agg('agg_slow', seq) FROM seq_1_to_10;
+ERROR HY000: py_agg: unknown Python function 'agg_slow'
+# --- four connections aggregate at the same time ---
+connect  con2,localhost,root,,test;
+connect  con3,localhost,root,,test;
+connect  con4,localhost,root,,test;
+connection con1;
+SELECT seq MOD 2 AS g, py_agg('agg_sum', seq) AS s, SUM(seq) AS expected FROM seq_1_to_400000 GROUP BY seq MOD 2 ORDER BY g;
+connection con2;
+SELECT seq MOD 3 AS g, py_agg('agg_sum', seq) AS s, SUM(seq) AS expected FROM seq_1_to_300000 GROUP BY seq MOD 3 ORDER BY g;
+connection con3;
+SELECT py_agg(DISTINCT 'agg_sum', seq MOD 1000) AS s FROM seq_1_to_200000;
+connection con4;
+SELECT py_agg('agg_sum', seq) FILTER (WHERE seq MOD 2 = 0) AS s FROM seq_1_to_200000;
+connection con1;
+g	s	expected
+0	40000200000	40000200000
+1	40000000000	40000000000
+connection con2;
+g	s	expected
+0	15000150000	15000150000
+1	14999950000	14999950000
+2	15000050000	15000050000
+connection con3;
+s
+499500
+connection con4;
+s
+10000100000
+connection default;
+disconnect con1;
+disconnect con2;
+disconnect con3;
+disconnect con4;
+SELECT py_drop_function('agg_sum');
+py_drop_function('agg_sum')
+1
+DROP TABLE ready;
+DROP TABLE mysql.lang_python_func;

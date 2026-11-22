@@ -1,0 +1,12 @@
+-- Get the path of the current Python interpreter.
+-- An external program (like Ansible or Terraform) could use this information to install modules
+-- in the right place.
+-- We register it as a named function: it is compiled once, stored in the
+-- mysql.lang_python_func catalog, and survives server restarts.
+-- param_names is NULL because the function takes no arguments.
+SELECT py_replace_function('example_python_path', 'VARCHAR', NULL, '
+    import site, os
+    result = os.path.dirname(site.getsitepackages()[0])
+');
+
+SELECT py_call('example_python_path') AS python_path;

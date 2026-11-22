@@ -1,0 +1,52 @@
+--echo #
+--echo # Error conditions in lax mode (lang_python_strict_errors=OFF)
+--echo #
+--echo # Confirms that opting out of strict mode preserves the legacy
+--echo # behaviour of returning SQL NULL plus a warning, so callers can
+--echo # observe failures via SHOW WARNINGS without aborting the query.
+--echo #
+
+SET SESSION lang_python_strict_errors=OFF;
+
+--echo # --- Python syntax error ---
+SELECT py_eval('def', 'INT');
+SHOW WARNINGS;
+
+SELECT py_exec('if True', 'INT');
+SHOW WARNINGS;
+
+--echo # --- Python runtime errors ---
+SELECT py_eval('1/0', 'INT');
+SHOW WARNINGS;
+
+SELECT py_eval('[][99]', 'INT');
+SHOW WARNINGS;
+
+SELECT py_eval('int("abc")', 'INT');
+SHOW WARNINGS;
+
+SELECT py_exec('open("/nonexistent/file")', 'VARCHAR');
+SHOW WARNINGS;
+
+--echo # --- Type conversion failures ---
+SELECT py_eval('"hello"', 'INT');
+SHOW WARNINGS;
+
+SELECT py_eval('[1,2,3]', 'DOUBLE');
+SHOW WARNINGS;
+
+--echo # --- Multiple errors in sequence (warnings don't leak) ---
+SELECT py_eval('1/0', 'INT');
+SELECT py_eval('2 + 2', 'INT');
+SHOW WARNINGS;
+
+--echo # --- Errors with table data: failing rows return NULL, others succeed ---
+CREATE TABLE t1 (a INT);
+INSERT INTO t1 VALUES (1), (0), (2);
+
+SELECT a, py_eval('10 / args[0]', 'INT', a) AS result FROM t1;
+SHOW WARNINGS;
+
+DROP TABLE t1;
+
+SET SESSION lang_python_strict_errors=DEFAULT;

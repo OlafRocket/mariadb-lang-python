@@ -1,0 +1,171 @@
+--echo #
+--echo # py_exec: basic functionality
+--echo #
+
+--echo # --- Simple result assignment ---
+SELECT py_exec('result = 42', 'INT');
+SELECT py_exec('result = 3.14', 'DOUBLE');
+SELECT py_exec('result = "hello"', 'VARCHAR');
+SELECT py_exec('result = bytes([0, 1])', 'BLOB');
+
+--echo # --- Multi-line code ---
+SELECT py_exec('
+import math
+x = args[0]
+y = args[1]
+result = math.sqrt(x ** 2 + y ** 2)
+', 'DOUBLE', 3, 4);
+
+--echo # --- Using args ---
+SELECT py_exec('
+total = 0
+for a in args:
+    total += a
+result = total
+', 'INT', 10, 20, 30);
+
+--echo # --- Auto-dedent: body indented to match the surrounding SQL ---
+--echo # Previously raised IndentationError; the common leading whitespace
+--echo # is now stripped before compiling, and nested indentation preserved.
+SELECT py_exec('
+    import math
+    result = math.sqrt(args[0] ** 2 + args[1] ** 2)
+', 'DOUBLE', 3, 4);
+
+SELECT py_exec('
+    total = 0
+    for a in args:
+        if a > 0:
+            total += a
+    result = total
+', 'INT', 10, -5, 20, -1);
+
+--echo # --- result absent → NULL ---
+SELECT py_exec('x = 42', 'INT');
+
+--echo # --- result = None → NULL ---
+SELECT py_exec('result = None', 'INT');
+
+--echo # --- Conditional result ---
+SELECT py_exec('
+if args[0] > 0:
+    result = "positive"
+elif args[0] < 0:
+    result = "negative"
+else:
+    result = "zero"
+', 'VARCHAR', 5);
+
+SELECT py_exec('
+if args[0] > 0:
+    result = "positive"
+elif args[0] < 0:
+    result = "negative"
+else:
+    result = "zero"
+', 'VARCHAR', -3);
+
+SELECT py_exec('
+if args[0] > 0:
+    result = "positive"
+elif args[0] < 0:
+    result = "negative"
+else:
+    result = "zero"
+', 'VARCHAR', 0);
+
+--echo # --- With table data ---
+CREATE TABLE t1 (name VARCHAR(50), score INT);
+INSERT INTO t1 VALUES ('Alice', 85), ('Bob', 92), ('Carol', 78);
+
+SELECT name, py_exec('
+if args[0] >= 90:
+    result = "A"
+elif args[0] >= 80:
+    result = "B"
+else:
+    result = "C"
+', 'VARCHAR', score) AS grade FROM t1;
+
+DROP TABLE t1;
+
+--echo # --- Isolation: no state leaks between calls ---
+SELECT py_exec('my_var = 42; result = my_var', 'INT');
+SELECT py_exec('result = "my_var" not in dir()', 'INT');
+
+--echo # --- Binary data as argument ---
+--echo # Binary data can be passed via SQL hex literal or UNHEX().
+--echo # The argument arrives as Python bytes; the code can process and return it.
+SELECT py_eval('len(args[0])', 'INT', X'DEADBEEF');
+SELECT py_eval('args[0].hex()', 'VARCHAR', X'00FF01FE');
+SELECT py_exec('result = args[0] + args[1]', 'BLOB', X'0102', X'0304');
+SELECT HEX(py_exec('result = args[0][::-1]', 'BLOB', UNHEX('48454C4C4F')));
+
+--echo # --- DECIMAL return type ---
+SELECT py_exec('
+from decimal import Decimal
+result = Decimal("1") / Decimal("3")
+', 'DECIMAL');
+SELECT py_exec('result = args[0] + args[1]', 'DECIMAL', 0.1, 0.2);
+
+--echo # --- BOOL return type ---
+SELECT py_exec('result = True', 'BOOL');
+SELECT py_exec('result = False', 'BOOL');
+SELECT py_exec('result = args[0] > args[1]', 'BOOLEAN', 10, 5);
+SELECT py_exec('result = args[0] > args[1]', 'BOOLEAN', 5, 10);
+
+--echo # --- List/dict processing ---
+SELECT py_exec('
+import json
+data = json.loads(args[0])
+result = sum(data)
+', 'INT', '[1, 2, 3, 4, 5]');
+
+SELECT py_exec('
+import json
+data = json.loads(args[0])
+result = json.dumps({k: v * 2 for k, v in data.items()})
+', 'VARCHAR', '{"a": 1, "b": 2}');
+
+--echo #
+--echo # Compiled code is reused between rows while the source is unchanged
+--echo #
+CREATE TABLE t_code (id INT, code TEXT, v INT);
+INSERT INTO t_code VALUES
+  (1, 'result = args[0] + 1',  10),
+  (2, 'result = args[0] + 1',  20),
+  (3, 'result = args[0] * 100', 30),
+  (4, 'result = args[0] + 1',  40),
+  (5, NULL,                    50),
+  (6, 'result = args[0] * 100', 60);
+--echo # --- constant source, many rows: one compile, a fresh namespace per row ---
+SELECT id, py_exec('
+    seen = globals().get("seen", 0) + 1
+    result = str(args[0]) + ":" + str(seen)
+', 'VARCHAR', v) AS r FROM t_code ORDER BY id;
+--echo # --- source from a column: recompiled whenever the text changes ---
+SELECT id, py_exec(code, 'INT', v) AS r FROM t_code ORDER BY id;
+--echo # --- two py_exec in one statement keep separate code ---
+SELECT id, py_exec('result = args[0] + 1', 'INT', v) AS a,
+           py_exec('result = args[0] - 1', 'INT', v) AS b FROM t_code WHERE id <= 2 ORDER BY id;
+--echo # --- prepared statement executed twice ---
+PREPARE st FROM "SELECT SUM(py_exec('result = args[0] * 2', 'INT', v)) AS s FROM t_code";
+EXECUTE st;
+EXECUTE st;
+DEALLOCATE PREPARE st;
+--echo # --- a syntax error is reported, and reported again on the next statement ---
+--error ER_UNKNOWN_ERROR
+SELECT py_exec('result = = 1', 'INT') FROM t_code;
+--error ER_UNKNOWN_ERROR
+SELECT py_exec('result = = 1', 'INT') FROM t_code;
+--echo # --- lax mode: a bad source gives NULL per row, a good one still runs ---
+UPDATE t_code SET code = 'result = (' WHERE id = 3;
+SET SESSION lang_python_strict_errors = 0;
+--disable_warnings
+SELECT id, py_exec(code, 'INT', v) AS r FROM t_code ORDER BY id;
+--enable_warnings
+SET SESSION lang_python_strict_errors = DEFAULT;
+--echo # --- a runtime error names the same location as before ---
+--error ER_UNKNOWN_ERROR
+SELECT py_exec('result = 1 // 0', 'INT');
+DROP TABLE t_code;

@@ -1,0 +1,135 @@
+--echo #
+--echo # Named Python functions (Phase 1.5):
+--echo # py_create_function / py_replace_function / py_drop_function / py_call
+--echo #
+
+--echo # --- create + call, named-parameter mode ---
+SELECT py_create_function('multiply', 'INT', 'x,y', 'result = x * y');
+SELECT py_call('multiply', 3, 4);
+SELECT py_call('multiply', 6, 7);
+
+--echo # --- args[] mode (param_names = NULL) ---
+SELECT py_create_function('total', 'DOUBLE', NULL, 'result = sum(args)');
+SELECT py_call('total', 1.5, 2.5, 3.0);
+
+--echo # --- remaining return types ---
+SELECT py_create_function('greet', 'VARCHAR', 'name', 'result = "hello " + name');
+SELECT py_call('greet', 'world');
+SELECT py_create_function('third', 'DECIMAL', NULL, '
+from decimal import Decimal
+result = Decimal(1) / Decimal(3)
+');
+SELECT py_call('third');
+SELECT py_create_function('is_even', 'BOOL', 'n', 'result = n % 2 == 0');
+SELECT py_call('is_even', 4), py_call('is_even', 5);
+
+--echo # --- multiline, indented body (auto-dedent) ---
+SELECT py_create_function('fib', 'INT', 'n', '
+    a, b = 0, 1
+    for _ in range(n):
+        a, b = b, a + b
+    result = a
+');
+SELECT py_call('fib', 10);
+
+--echo # --- body semantics match py_exec: no result variable means NULL ---
+SELECT py_create_function('noret', 'INT', NULL, 'x = 1');
+SELECT py_call('noret');
+
+--echo # --- top-level return is deliberately NOT supported (no def-wrap) ---
+--error ER_UNKNOWN_ERROR
+SELECT py_create_function('retstyle', 'INT', 'x,y', 'return x * y');
+
+--echo # --- catalog table is a plain system table ---
+SELECT name, return_type, param_names, strict_errors
+  FROM mysql.lang_python_func ORDER BY name;
+
+--echo # --- duplicate create errors; py_replace_function overwrites ---
+--error ER_UNKNOWN_ERROR
+SELECT py_create_function('multiply', 'INT', 'x,y', 'result = x + y');
+SELECT py_replace_function('multiply', 'INT', 'x,y', 'result = x * y * 10');
+SELECT py_call('multiply', 3, 4);
+
+--echo # --- compile errors surface at create time ---
+--error ER_UNKNOWN_ERROR
+SELECT py_create_function('broken', 'INT', NULL, 'result = ((');
+--error ER_UNKNOWN_ERROR
+SELECT py_create_function('badparams', 'INT', 'x, 1y', 'result = 1');
+--error ER_UNKNOWN_ERROR
+SELECT py_create_function('injection', 'INT', 'x): pass', 'result = 1');
+
+--echo # --- reserved parameter names ---
+--error ER_UNKNOWN_ERROR
+SELECT py_create_function('shadow1', 'INT', 'result', 'result = 1');
+--error ER_UNKNOWN_ERROR
+SELECT py_create_function('shadow2', 'INT', 'x,args', 'result = x');
+--error ER_UNKNOWN_ERROR
+SELECT py_create_function('shadow3', 'INT', '__builtins__', 'result = 1');
+
+--echo # --- invalid name / type / NULL body ---
+--error ER_UNKNOWN_ERROR
+SELECT py_create_function('bad-name', 'INT', NULL, 'result = 1');
+--error ER_WRONG_VALUE_FOR_TYPE
+SELECT py_create_function('badtype', 'DATETIME', NULL, 'result = 1');
+--error ER_UNKNOWN_ERROR
+SELECT py_create_function('nobody', 'INT', NULL, NULL);
+
+--echo # --- unknown function ---
+--error ER_UNKNOWN_ERROR
+SELECT py_call('no_such_function');
+--error ER_UNKNOWN_ERROR
+SELECT py_drop_function('no_such_function');
+SELECT py_drop_function('no_such_function', 1);
+
+--echo # --- runtime errors honour the frozen strict_errors flag ---
+SELECT py_create_function('boom_strict', 'INT', NULL, 'raise ValueError("nope")');
+--error ER_UNKNOWN_ERROR
+SELECT py_call('boom_strict');
+SELECT py_create_function('boom_lax', 'INT', NULL, 'raise ValueError("nope")', 0);
+SELECT py_call('boom_lax');
+SHOW WARNINGS;
+
+--echo # --- argument count must match param_names ---
+--error ER_UNKNOWN_ERROR
+SELECT py_call('multiply', 1);
+--error ER_UNKNOWN_ERROR
+SELECT py_call('multiply', 1, 2, 3);
+
+--echo # --- py_call requires a constant function name ---
+CREATE TABLE t1 (n VARCHAR(10));
+INSERT INTO t1 VALUES ('multiply');
+--error ER_UNKNOWN_ERROR
+SELECT py_call(n, 1, 2) FROM t1;
+DROP TABLE t1;
+
+--echo # --- per-row usage over a table ---
+CREATE TABLE t2 (a INT, b INT);
+INSERT INTO t2 VALUES (1,2),(3,4),(5,6);
+SELECT a, b, py_call('multiply', a, b) FROM t2 ORDER BY a;
+DROP TABLE t2;
+
+--echo # --- NULL argument becomes Python None ---
+SELECT py_create_function('is_null', 'BOOL', 'v', 'result = v is None');
+SELECT py_call('is_null', NULL), py_call('is_null', 0);
+
+--echo # --- functions survive a server restart (catalog reload) ---
+--source include/restart_mysqld.inc
+SELECT py_call('multiply', 3, 4);
+SELECT py_call('fib', 10);
+
+--echo # --- cleanup ---
+SELECT py_drop_function('multiply');
+SELECT py_drop_function('total');
+SELECT py_drop_function('greet');
+SELECT py_drop_function('third');
+SELECT py_drop_function('is_even');
+SELECT py_drop_function('fib');
+SELECT py_drop_function('noret');
+SELECT py_drop_function('boom_strict');
+SELECT py_drop_function('boom_lax');
+SELECT py_drop_function('is_null');
+SELECT COUNT(*) FROM mysql.lang_python_func;
+
+# The catalog table is auto-created on first use; drop it again so MTR's
+# check-testcase sees identical before/after states of the mysql schema.
+DROP TABLE mysql.lang_python_func;

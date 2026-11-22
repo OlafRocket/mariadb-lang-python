@@ -1,0 +1,68 @@
+--echo #
+--echo # NULL handling: all 6 levels
+--echo #
+
+--echo # --- Level 1: code/expr arg is NULL → SQL NULL silently ---
+SELECT py_eval(NULL, 'INT');
+SELECT py_eval(NULL, 'VARCHAR');
+SELECT py_exec(NULL, 'INT');
+SELECT py_eval(NULL, 'INT') IS NULL AS is_null;
+
+--echo # --- Level 2: type arg is NULL → error at prepare time ---
+--error ER_WRONG_TYPE_FOR_VAR
+SELECT py_eval('1', NULL);
+
+--error ER_WRONG_TYPE_FOR_VAR
+SELECT py_exec('result = 1', NULL);
+
+--echo # --- Level 3: data arg is NULL → Python sees None ---
+SELECT py_eval('args[0] is None', 'VARCHAR', NULL);
+SELECT py_eval('str(type(args[0]))', 'VARCHAR', NULL);
+SELECT py_eval('args[0] is None and args[1] == 42', 'VARCHAR', NULL, 42);
+
+--echo # --- Level 3: NULL data arg with computation ---
+SELECT py_eval('0 if args[0] is None else args[0] * 2', 'INT', NULL);
+SELECT py_eval('0 if args[0] is None else args[0] * 2', 'INT', 5);
+
+--echo # --- Level 4: Python exception → SQL NULL + warning (lax mode) ---
+--echo # Strict mode (the default) is exercised in errors.test; here we
+--echo # verify the NULL-returning behaviour when strict mode is OFF.
+SET SESSION lang_python_strict_errors=OFF;
+
+SELECT py_eval('1/0', 'INT');
+SHOW WARNINGS;
+
+SELECT py_eval('undefined_var', 'INT');
+SHOW WARNINGS;
+
+SELECT py_exec('raise ValueError("test error")', 'INT');
+SHOW WARNINGS;
+
+--echo # --- Level 5: result absent or None → SQL NULL silently ---
+SELECT py_exec('x = 42', 'INT');
+SELECT py_exec('x = 42', 'INT') IS NULL AS is_null;
+
+SELECT py_exec('result = None', 'INT');
+SELECT py_exec('result = None', 'INT') IS NULL AS is_null;
+
+SELECT py_eval('None', 'INT');
+SELECT py_eval('None', 'INT') IS NULL AS is_null;
+
+--echo # --- Level 6: type conversion failure → SQL NULL + warning (lax mode) ---
+--echo # Strict mode is still off from the Level 4 section above.
+SELECT py_eval('"not_a_number"', 'INT');
+SHOW WARNINGS;
+
+SELECT py_eval('"not_a_number"', 'DOUBLE');
+SHOW WARNINGS;
+
+SET SESSION lang_python_strict_errors=DEFAULT;
+
+--echo # --- NULL propagation in table context ---
+CREATE TABLE t1 (a INT);
+INSERT INTO t1 VALUES (1), (NULL), (3);
+
+SELECT a, py_eval('args[0] * 2 if args[0] is not None else None', 'INT', a) AS doubled FROM t1;
+SELECT a, py_eval('args[0] * 2 if args[0] is not None else None', 'INT', a) IS NULL AS is_null FROM t1;
+
+DROP TABLE t1;

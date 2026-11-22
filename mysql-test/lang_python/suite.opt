@@ -1,0 +1,2 @@
+--plugin-load-add=$LANG_PYTHON_SO
+--plugin-maturity=experimental

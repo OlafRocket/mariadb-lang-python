@@ -1,0 +1,52 @@
+#
+# Error conditions (strict mode, default)
+#
+# With lang_python_strict_errors=ON (default), Python exceptions and
+# result-conversion failures abort the query with ER_UNKNOWN_ERROR.
+# See errors_lax.test for the opt-out (warning + NULL) behaviour.
+#
+# --- Wrong argument count ---
+SELECT py_eval('1');
+ERROR 42000: Incorrect parameter count in the call to native function 'py_eval'
+SELECT py_exec('1');
+ERROR 42000: Incorrect parameter count in the call to native function 'py_exec'
+# --- Invalid type string ---
+SELECT py_eval('1', 'DATETIME');
+ERROR HY000: Incorrect type value: 'DATETIME' for function py_eval
+SELECT py_eval('1', 'BIGINT');
+ERROR HY000: Incorrect type value: 'BIGINT' for function py_eval
+SELECT py_exec('result = 1', 'ARRAY');
+ERROR HY000: Incorrect type value: 'ARRAY' for function py_exec
+# --- Python syntax error → query fails ---
+SELECT py_eval('def', 'INT');
+ERROR HY000: py_eval: SyntaxError: invalid syntax (<string>, line 1)
+SELECT py_exec('if True', 'INT');
+ERROR HY000: py_exec: SyntaxError: expected ':' (<string>, line 1)
+# --- Python runtime errors → query fails ---
+SELECT py_eval('1/0', 'INT');
+ERROR HY000: py_eval: ZeroDivisionError: division by zero
+SELECT py_eval('[][99]', 'INT');
+ERROR HY000: py_eval: IndexError: list index out of range
+SELECT py_eval('int("abc")', 'INT');
+ERROR HY000: py_eval: ValueError: invalid literal for int() with base 10: 'abc'
+SELECT py_exec('open("/nonexistent/file")', 'VARCHAR');
+ERROR HY000: py_exec: FileNotFoundError: [Errno 2] No such file or directory: '/nonexistent/file'
+# --- Type conversion failures → query fails ---
+# str object cannot be directly converted to INT by PyLong_AsLongLong
+SELECT py_eval('"hello"', 'INT');
+ERROR HY000: py_eval: cannot convert result to INT
+# list cannot be converted to DOUBLE
+SELECT py_eval('[1,2,3]', 'DOUBLE');
+ERROR HY000: py_eval: cannot convert result to DOUBLE
+# --- Successful call after a failed one (no leaked state) ---
+SELECT py_eval('1/0', 'INT');
+ERROR HY000: py_eval: ZeroDivisionError: division by zero
+SELECT py_eval('2 + 2', 'INT');
+py_eval('2 + 2', 'INT')
+4
+# --- Errors with table data: query aborts on the first failing row ---
+CREATE TABLE t1 (a INT);
+INSERT INTO t1 VALUES (1), (0), (2);
+SELECT a, py_eval('10 / args[0]', 'INT', a) AS result FROM t1;
+ERROR HY000: py_eval: ZeroDivisionError: division by zero
+DROP TABLE t1;

@@ -1,0 +1,69 @@
+#
+# Plugin system variables and runtime settings
+#
+# --- lang_python_vector_numpy variable ---
+# Default is ON: VECTOR columns auto-convert to numpy.ndarray(float32)
+SELECT @@global.lang_python_vector_numpy;
+@@global.lang_python_vector_numpy
+1
+# Can be toggled at runtime
+SET GLOBAL lang_python_vector_numpy = 0;
+SELECT @@global.lang_python_vector_numpy;
+@@global.lang_python_vector_numpy
+0
+SET GLOBAL lang_python_vector_numpy = 1;
+SELECT @@global.lang_python_vector_numpy;
+@@global.lang_python_vector_numpy
+1
+# --- numpy is available in the embedded interpreter ---
+SELECT py_eval('int(__import__("numpy").__version__.split(".")[0]) >= 2', 'BOOL') AS numpy_2_or_newer;
+numpy_2_or_newer
+1
+SELECT py_eval('type(__import__("numpy").array([1,2,3])).__name__', 'VARCHAR');
+py_eval('type(__import__("numpy").array([1,2,3])).__name__', 'VARCHAR')
+ndarray
+# --- numpy operations work ---
+SELECT py_eval('float(__import__("numpy").dot([1,2,3],[4,5,6]))', 'DOUBLE');
+py_eval('float(__import__("numpy").dot([1,2,3],[4,5,6]))', 'DOUBLE')
+32
+SELECT py_exec('
+import numpy as np
+a = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+result = float(np.linalg.norm(a))
+', 'DOUBLE');
+py_exec('
+import numpy as np
+a = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+result = float(np.linalg.norm(a))
+', 'DOUBLE')
+3.7416574954986572
+# --- Restore default ---
+SET GLOBAL lang_python_vector_numpy = 1;
+# --- lang_python_strict_errors variable ---
+# Default is ON: Python exceptions and conversion failures abort the query
+SELECT @@global.lang_python_strict_errors;
+@@global.lang_python_strict_errors
+1
+SELECT @@session.lang_python_strict_errors;
+@@session.lang_python_strict_errors
+1
+# Settable per session and globally
+SET SESSION lang_python_strict_errors = 0;
+SELECT @@session.lang_python_strict_errors;
+@@session.lang_python_strict_errors
+0
+SET SESSION lang_python_strict_errors = 1;
+SELECT @@session.lang_python_strict_errors;
+@@session.lang_python_strict_errors
+1
+SET GLOBAL lang_python_strict_errors = 0;
+SELECT @@global.lang_python_strict_errors;
+@@global.lang_python_strict_errors
+0
+SET GLOBAL lang_python_strict_errors = 1;
+SELECT @@global.lang_python_strict_errors;
+@@global.lang_python_strict_errors
+1
+# Non-boolean assignment is rejected
+SET SESSION lang_python_strict_errors = 'banana';
+ERROR 42000: Variable 'lang_python_strict_errors' can't be set to the value of 'banana'

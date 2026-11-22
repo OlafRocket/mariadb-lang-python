@@ -1,0 +1,4 @@
+# Keep the build context minimal: the container build only needs the
+# plugin sources; git metadata is not used inside the image (the server
+# tree is cloned fresh in the builder stage, with its own .git).
+.git/

@@ -1,0 +1,180 @@
+--source include/have_sequence.inc
+--source include/have_innodb.inc
+
+--echo #
+--echo # inhost.sql.query_array (Phase 2): result set as one numpy array per column
+--echo #
+
+CREATE TABLE t1 (
+  id INT, ti TINYINT, si SMALLINT, bi BIGINT, ub BIGINT UNSIGNED, yr YEAR,
+  f FLOAT, d DOUBLE, dec1 DECIMAL(10,3), name VARCHAR(20), data BLOB,
+  dt DATETIME(3), da DATE, tm TIME, v VECTOR(3)
+);
+INSERT INTO t1 VALUES
+  (1, 7, 300, 9000000000, 18446744073709551615, 2026, 1.5, 2.25, 12.345,
+   'alice', x'00FF', '2026-11-20 10:11:12.345', '2026-11-20', '10:11:12',
+   VEC_FromText('[1,2,3]')),
+  (2, -7, -300, -9000000000, 0, 1999, -1.5, -2.25, -12.345,
+   'bob', x'AB', '2000-01-01 00:00:00', '2000-01-01', '00:00:01',
+   VEC_FromText('[4,5,6]'));
+
+--echo # --- dtype, shape and values per column type ---
+SELECT py_exec('
+import inhost
+cols = inhost.sql.query_array("SELECT * FROM test.t1 ORDER BY id")
+result = "\\n".join(k + ": " + str(a.dtype) + " " + str(a.shape) + " " + repr(a.tolist()) for k, a in cols.items())
+', 'VARCHAR') AS cols;
+
+--echo # --- the result is a dict in select order ---
+SELECT py_exec('
+import inhost
+cols = inhost.sql.query_array("SELECT d, id, name FROM test.t1")
+result = type(cols).__name__ + " " + ",".join(cols)
+', 'VARCHAR') AS shape;
+
+--echo # --- expressions and aggregates are typed too ---
+SELECT py_exec('
+import inhost
+cols = inhost.sql.query_array("SELECT 1+1 AS a, 1.5e0*2 AS b, 1.10+2.20 AS c, CONCAT(\'x\',\'y\') AS s, COUNT(*) AS n, AVG(d) AS av, id > 0 AS t FROM test.t1 GROUP BY id > 0")
+result = "; ".join(k + "=" + str(a.dtype) + repr(a.tolist()) for k, a in cols.items())
+', 'VARCHAR') AS exprs;
+
+--echo # --- NULL handling ---
+INSERT INTO t1 (id) VALUES (3);
+SELECT py_exec('
+import inhost
+cols = inhost.sql.query_array("SELECT d, dec1, name, data, dt FROM test.t1 ORDER BY id")
+result = "; ".join(k + "=" + str(a.dtype) + repr(a.tolist()) for k, a in cols.items())
+', 'VARCHAR') AS nulls_float_and_object;
+SELECT py_exec('
+import inhost
+try:
+    inhost.sql.query_array("SELECT id, bi FROM test.t1")
+    result = "NO ERROR"
+except inhost.sql.Error as e:
+    result = str(e)
+', 'VARCHAR') AS null_in_int;
+SELECT py_exec('
+import inhost
+cols = inhost.sql.query_array("SELECT id, bi, ub FROM test.t1 ORDER BY id", nulls="nan")
+result = "; ".join(k + "=" + str(a.dtype) + repr(a.tolist()) for k, a in cols.items())
+', 'VARCHAR') AS nulls_nan;
+SELECT py_exec('
+import inhost
+try:
+    inhost.sql.query_array("SELECT v FROM test.t1")
+    result = "NO ERROR"
+except inhost.sql.Error as e:
+    result = str(e)
+', 'VARCHAR') AS null_in_vector;
+SELECT py_exec('
+import inhost
+try:
+    inhost.sql.query_array("SELECT 1", nulls="zero")
+    result = "NO ERROR"
+except ValueError as e:
+    result = str(e)
+', 'VARCHAR') AS bad_nulls;
+DELETE FROM t1 WHERE id = 3;
+
+--echo # --- empty results keep their dtypes; no result set gives {} ---
+SELECT py_exec('
+import inhost
+cols = inhost.sql.query_array("SELECT id, d, name, v FROM test.t1 WHERE id < 0")
+result = "; ".join(k + "=" + str(a.dtype) + str(a.shape) for k, a in cols.items())
+', 'VARCHAR') AS empty;
+SELECT py_exec('
+import inhost
+result = repr(inhost.sql.query_array("UPDATE test.t1 SET name = %s WHERE id = %s", ("bobby", 2)))
+', 'VARCHAR') AS no_result_set;
+SELECT id, name FROM t1 ORDER BY id;
+
+--echo # --- parameters: quoting, backslashes, non-ASCII, bytes, None ---
+SELECT py_exec('
+import inhost
+cols = inhost.sql.query_array("SELECT %s AS q, %s AS b, %s AS u, %s AS x, %s AS n, %s AS i, \'100%%\' AS p", ("it\'s", "a\\\\b", "z\\u00fcrich \\u65e5\\u672c", b"\\x00\\xff", None, 42))
+result = "; ".join(k + "=" + str(a.dtype) + ascii(a.tolist()) for k, a in cols.items())
+', 'VARCHAR') AS params;
+
+--echo # --- strings are returned as UTF-8 whatever the column charset ---
+CREATE TABLE t2 (s VARCHAR(20) CHARACTER SET latin1);
+INSERT INTO t2 VALUES (CONVERT(_utf8mb4 x'7AC3BC72696368' USING latin1));
+SELECT py_exec('
+import inhost
+cols = inhost.sql.query_array("SELECT s, LENGTH(s) AS bytes_in_table FROM test.t2")
+result = repr(cols["s"][0].encode("utf-8")) + " " + str(cols["bytes_in_table"][0])
+', 'VARCHAR') AS latin1_column;
+DROP TABLE t2;
+
+--echo # --- errors ---
+SELECT py_exec('
+import inhost
+out = []
+for q in ("SELECT * FROM test.no_such_table", "SELEC nonsense", "SELECT id, id FROM test.t1", "SELECT id AS a, d AS a FROM test.t1"):
+    try:
+        inhost.sql.query_array(q)
+        out.append("NO ERROR")
+    except inhost.sql.Error as e:
+        out.append(str(e)[:60])
+result = "\\n".join(out)
+', 'VARCHAR') AS errors;
+SELECT 'session still usable' AS after_errors;
+
+--echo # --- the kill switch covers query_array ---
+SET GLOBAL lang_python_db_access = OFF;
+SELECT py_exec('
+import inhost
+try:
+    inhost.sql.query_array("SELECT 1")
+    result = "NO ERROR"
+except inhost.sql.Error as e:
+    result = str(e)
+', 'VARCHAR') AS disabled;
+SET GLOBAL lang_python_db_access = ON;
+
+--echo # --- called per row while the outer statement reads the same table ---
+SELECT id, py_exec('
+import inhost
+result = int(inhost.sql.query_array("SELECT COUNT(*) AS n FROM test.t1 WHERE id <= %s", (args[0],))["n"][0])
+', 'INT', id) AS cnt FROM t1 ORDER BY id;
+
+--echo # --- from a named function ---
+SELECT py_create_function('qa_sum', 'DOUBLE', 'lo,hi', '
+import inhost
+result = float(inhost.sql.query_array("SELECT seq FROM test.seq_1_to_1000 WHERE seq BETWEEN %s AND %s", (lo, hi))["seq"].sum())
+');
+SELECT py_call('qa_sum', 1, 100) AS s1, py_call('qa_sum', 901, 1000) AS s2;
+SELECT py_drop_function('qa_sum');
+# The catalog table is auto-created on first use; drop it again so MTR's
+# check-testcase sees identical before/after states of the mysql schema.
+DROP TABLE mysql.lang_python_func;
+
+--echo # --- larger result: 300000 rows, three dtypes ---
+SELECT py_exec('
+import inhost
+cols = inhost.sql.query_array("SELECT seq, seq * 0.5e0 AS h, CAST(seq AS SIGNED) - 150000 AS s FROM test.seq_1_to_300000")
+result = " ".join(str(a.dtype) + ":" + str(len(a)) + ":" + str(a.sum()) for a in cols.values())
+', 'VARCHAR') AS big;
+
+--echo # --- separate transaction: uncommitted changes of the caller are not visible ---
+CREATE TABLE t3 (id INT PRIMARY KEY) ENGINE=InnoDB;
+INSERT INTO t3 VALUES (1), (2);
+BEGIN;
+INSERT INTO t3 VALUES (3);
+SELECT py_exec('
+import inhost
+result = int(inhost.sql.query_array("SELECT COUNT(*) AS n FROM test.t3")["n"][0])
+', 'INT') AS seen_inside, (SELECT COUNT(*) FROM t3) AS seen_by_caller;
+ROLLBACK;
+SELECT COUNT(*) AS after_rollback FROM t3;
+DROP TABLE t3;
+
+--echo # --- same data as query() ---
+SELECT py_exec('
+import inhost
+rows = inhost.sql.query("SELECT id, d, name FROM test.t1 ORDER BY id")
+cols = inhost.sql.query_array("SELECT id, d, name FROM test.t1 ORDER BY id")
+result = "same" if rows == list(zip(*(a.tolist() for a in cols.values()))) else "DIFFERENT"
+', 'VARCHAR') AS vs_query;
+
+DROP TABLE t1;

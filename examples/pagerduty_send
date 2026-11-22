@@ -1,0 +1,104 @@
+-- Send a PagerDuty alert so that someone can take action immediately.
+-- In this example, the incident is triggered when someone deletes data from a financial table.
+-- What happens depends on the severity level and PagerDuty configuration.
+-- In this case, my phone rings and I get an SMS once per minute until the incident is solved
+-- (please ask me if it's ok before making it happen...).
+--
+-- Unlike slack_send, here the Python body reads its own configuration with the
+-- built-in inhost module (in-process SQL, no client connection), so no SQL
+-- helper function is needed. Note that inhost.sql runs on a separate internal
+-- connection: always qualify table names, as there is no current database.
+--
+-- Replace the pagerduty_key value with your own routing key before running.
+
+-- Test:
+-- DELETE FROM payment WHERE payer LIKE '%nimoy%';
+-- Output:
+-- MariaDB [xmp]> DELETE FROM payment WHERE payer LIKE '%nimoy%';
+-- ERROR 30001 (45000): Hey! What do you think you're doing with our financial data, lowlife!
+
+CREATE OR REPLACE SCHEMA xmp;
+USE xmp;
+
+CREATE OR REPLACE TABLE config (
+    name VARCHAR(100) NOT NULL,
+    value VARCHAR(100) NOT NULL,
+    PRIMARY KEY (name)
+);
+INSERT INTO config (name, value) VALUES
+    ('pagerduty_key', 'XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX')
+;
+
+CREATE OR REPLACE TABLE payment (
+    id UUID DEFAULT UUID_v7(),
+    payer VARCHAR(100) NOT NULL,
+    amount FLOAT NOT NULL,
+    PRIMARY KEY (id)
+);
+INSERT INTO payment (payer, amount) VALUES
+    ('Leonard Nimoy', 99.99),
+    ('Tom Baker', 199.99)
+;
+
+SELECT py_replace_function('example_pagerduty_incident', 'VARCHAR', 'severity,summary', '
+    import json
+    import urllib.request
+    import urllib.error
+    import inhost
+
+    EVENTS_URL = "https://events.pagerduty.com/v2/enqueue"
+
+    # fetch the routing key in-process
+    rows = inhost.sql.query(
+        "SELECT value FROM xmp.config WHERE name = %s", ("pagerduty_key",))
+    if not rows or not rows[0][0]:
+        raise ValueError("pagerduty_key is not configured")
+    key = rows[0][0]
+
+    # validate severity
+    # PagerDuty API v2 strictly requires one of these four lowercase strings
+    allowed_severities = {"critical", "error", "warning", "info"}
+    severity = severity.lower()
+    if severity not in allowed_severities:
+        raise ValueError("Invalid severity. Must be one of " + str(allowed_severities))
+
+    # validate summary
+    if not summary:
+        raise ValueError("summary is mandatory")
+
+    # compose the request payload
+    payload = {
+        "routing_key": key,
+        "event_action": "trigger",
+        "payload": {
+            "summary": summary,
+            "severity": severity,
+            "source": "MariaDB",
+        },
+    }
+
+    # send an HTTP request
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(EVENTS_URL, data=data, method="POST")
+    req.add_header("Content-Type", "application/json")
+
+    try:
+        with urllib.request.urlopen(req) as response:
+            resp_data = json.loads(response.read())
+            result = json.dumps({"success": True, "dedup_key": resp_data.get("dedup_key")})
+    except urllib.error.HTTPError as e:
+        raise ValueError("HTTP Error " + str(e.code) + ": " + e.read().decode("utf-8"))
+    except urllib.error.URLError as e:
+        raise ValueError("Connection Error: " + str(e.reason))
+');
+
+DELIMITER ||
+CREATE OR REPLACE DEFINER=`root`@`localhost` TRIGGER bd_payment
+    BEFORE DELETE ON payment
+    FOR EACH ROW
+BEGIN
+    DO py_call('example_pagerduty_incident', 'critical',
+        CONCAT('Someone has tried to delete a payment from ', OLD.payer));
+    SIGNAL SQLSTATE '45000' SET MYSQL_ERRNO=30001, MESSAGE_TEXT='Hey! What do you think you''re doing with our financial data, lowlife!';
+END ||
+DELIMITER ;

@@ -1,0 +1,209 @@
+#
+# Named Python functions (Phase 1.5):
+# py_create_function / py_replace_function / py_drop_function / py_call
+#
+# --- create + call, named-parameter mode ---
+SELECT py_create_function('multiply', 'INT', 'x,y', 'result = x * y');
+py_create_function('multiply', 'INT', 'x,y', 'result = x * y')
+1
+SELECT py_call('multiply', 3, 4);
+py_call('multiply', 3, 4)
+12
+SELECT py_call('multiply', 6, 7);
+py_call('multiply', 6, 7)
+42
+# --- args[] mode (param_names = NULL) ---
+SELECT py_create_function('total', 'DOUBLE', NULL, 'result = sum(args)');
+py_create_function('total', 'DOUBLE', NULL, 'result = sum(args)')
+1
+SELECT py_call('total', 1.5, 2.5, 3.0);
+py_call('total', 1.5, 2.5, 3.0)
+7
+# --- remaining return types ---
+SELECT py_create_function('greet', 'VARCHAR', 'name', 'result = "hello " + name');
+py_create_function('greet', 'VARCHAR', 'name', 'result = "hello " + name')
+1
+SELECT py_call('greet', 'world');
+py_call('greet', 'world')
+hello world
+SELECT py_create_function('third', 'DECIMAL', NULL, '
+from decimal import Decimal
+result = Decimal(1) / Decimal(3)
+');
+py_create_function('third', 'DECIMAL', NULL, '
+from decimal import Decimal
+result = Decimal(1) / Decimal(3)
+')
+1
+SELECT py_call('third');
+py_call('third')
+0.333333333333333333333333333300000000000
+SELECT py_create_function('is_even', 'BOOL', 'n', 'result = n % 2 == 0');
+py_create_function('is_even', 'BOOL', 'n', 'result = n % 2 == 0')
+1
+SELECT py_call('is_even', 4), py_call('is_even', 5);
+py_call('is_even', 4)	py_call('is_even', 5)
+1	0
+# --- multiline, indented body (auto-dedent) ---
+SELECT py_create_function('fib', 'INT', 'n', '
+    a, b = 0, 1
+    for _ in range(n):
+        a, b = b, a + b
+    result = a
+');
+py_create_function('fib', 'INT', 'n', '
+    a, b = 0, 1
+    for _ in range(n):
+        a, b = b, a + b
+    result = a
+')
+1
+SELECT py_call('fib', 10);
+py_call('fib', 10)
+55
+# --- body semantics match py_exec: no result variable means NULL ---
+SELECT py_create_function('noret', 'INT', NULL, 'x = 1');
+py_create_function('noret', 'INT', NULL, 'x = 1')
+1
+SELECT py_call('noret');
+py_call('noret')
+NULL
+# --- top-level return is deliberately NOT supported (no def-wrap) ---
+SELECT py_create_function('retstyle', 'INT', 'x,y', 'return x * y');
+ERROR HY000: py_create_function: retstyle: SyntaxError: 'return' outside function (<lang_python>, line 1)
+# --- catalog table is a plain system table ---
+SELECT name, return_type, param_names, strict_errors
+FROM mysql.lang_python_func ORDER BY name;
+name	return_type	param_names	strict_errors
+fib	INT	n	1
+greet	VARCHAR	name	1
+is_even	BOOL	n	1
+multiply	INT	x,y	1
+noret	INT	NULL	1
+third	DECIMAL	NULL	1
+total	DOUBLE	NULL	1
+# --- duplicate create errors; py_replace_function overwrites ---
+SELECT py_create_function('multiply', 'INT', 'x,y', 'result = x + y');
+ERROR HY000: py_create_function: function 'multiply' already exists (use py_replace_function)
+SELECT py_replace_function('multiply', 'INT', 'x,y', 'result = x * y * 10');
+py_replace_function('multiply', 'INT', 'x,y', 'result = x * y * 10')
+1
+SELECT py_call('multiply', 3, 4);
+py_call('multiply', 3, 4)
+120
+# --- compile errors surface at create time ---
+SELECT py_create_function('broken', 'INT', NULL, 'result = ((');
+ERROR HY000: py_create_function: broken: SyntaxError: '(' was never closed (<lang_python>, line 1)
+SELECT py_create_function('badparams', 'INT', 'x, 1y', 'result = 1');
+ERROR HY000: py_create_function: invalid parameter name '1y'
+SELECT py_create_function('injection', 'INT', 'x): pass', 'result = 1');
+ERROR HY000: py_create_function: param_names must be a comma-separated list of identifiers
+# --- reserved parameter names ---
+SELECT py_create_function('shadow1', 'INT', 'result', 'result = 1');
+ERROR HY000: py_create_function: parameter name 'result' is reserved
+SELECT py_create_function('shadow2', 'INT', 'x,args', 'result = x');
+ERROR HY000: py_create_function: parameter name 'args' is reserved
+SELECT py_create_function('shadow3', 'INT', '__builtins__', 'result = 1');
+ERROR HY000: py_create_function: parameter name '__builtins__' is reserved
+# --- invalid name / type / NULL body ---
+SELECT py_create_function('bad-name', 'INT', NULL, 'result = 1');
+ERROR HY000: py_create_function: function name must be an identifier of at most 64 characters [A-Za-z0-9_]
+SELECT py_create_function('badtype', 'DATETIME', NULL, 'result = 1');
+ERROR HY000: Incorrect type value: 'DATETIME' for function py_create_function
+SELECT py_create_function('nobody', 'INT', NULL, NULL);
+ERROR HY000: py_create_function: body cannot be NULL
+# --- unknown function ---
+SELECT py_call('no_such_function');
+ERROR HY000: py_call: unknown Python function 'no_such_function'
+SELECT py_drop_function('no_such_function');
+ERROR HY000: py_drop_function: unknown function 'no_such_function'
+SELECT py_drop_function('no_such_function', 1);
+py_drop_function('no_such_function', 1)
+1
+# --- runtime errors honour the frozen strict_errors flag ---
+SELECT py_create_function('boom_strict', 'INT', NULL, 'raise ValueError("nope")');
+py_create_function('boom_strict', 'INT', NULL, 'raise ValueError("nope")')
+1
+SELECT py_call('boom_strict');
+ERROR HY000: py_call: ValueError: nope
+SELECT py_create_function('boom_lax', 'INT', NULL, 'raise ValueError("nope")', 0);
+py_create_function('boom_lax', 'INT', NULL, 'raise ValueError("nope")', 0)
+1
+SELECT py_call('boom_lax');
+py_call('boom_lax')
+NULL
+Warnings:
+Warning	1105	py_call: ValueError: nope
+SHOW WARNINGS;
+Level	Code	Message
+Warning	1105	py_call: ValueError: nope
+# --- argument count must match param_names ---
+SELECT py_call('multiply', 1);
+ERROR HY000: py_call: function 'multiply' expects 2 arguments, got 1
+SELECT py_call('multiply', 1, 2, 3);
+ERROR HY000: py_call: function 'multiply' expects 2 arguments, got 3
+# --- py_call requires a constant function name ---
+CREATE TABLE t1 (n VARCHAR(10));
+INSERT INTO t1 VALUES ('multiply');
+SELECT py_call(n, 1, 2) FROM t1;
+ERROR HY000: py_call: function name must be a string constant
+DROP TABLE t1;
+# --- per-row usage over a table ---
+CREATE TABLE t2 (a INT, b INT);
+INSERT INTO t2 VALUES (1,2),(3,4),(5,6);
+SELECT a, b, py_call('multiply', a, b) FROM t2 ORDER BY a;
+a	b	py_call('multiply', a, b)
+1	2	20
+3	4	120
+5	6	300
+DROP TABLE t2;
+# --- NULL argument becomes Python None ---
+SELECT py_create_function('is_null', 'BOOL', 'v', 'result = v is None');
+py_create_function('is_null', 'BOOL', 'v', 'result = v is None')
+1
+SELECT py_call('is_null', NULL), py_call('is_null', 0);
+py_call('is_null', NULL)	py_call('is_null', 0)
+1	0
+# --- functions survive a server restart (catalog reload) ---
+# restart
+SELECT py_call('multiply', 3, 4);
+py_call('multiply', 3, 4)
+120
+SELECT py_call('fib', 10);
+py_call('fib', 10)
+55
+# --- cleanup ---
+SELECT py_drop_function('multiply');
+py_drop_function('multiply')
+1
+SELECT py_drop_function('total');
+py_drop_function('total')
+1
+SELECT py_drop_function('greet');
+py_drop_function('greet')
+1
+SELECT py_drop_function('third');
+py_drop_function('third')
+1
+SELECT py_drop_function('is_even');
+py_drop_function('is_even')
+1
+SELECT py_drop_function('fib');
+py_drop_function('fib')
+1
+SELECT py_drop_function('noret');
+py_drop_function('noret')
+1
+SELECT py_drop_function('boom_strict');
+py_drop_function('boom_strict')
+1
+SELECT py_drop_function('boom_lax');
+py_drop_function('boom_lax')
+1
+SELECT py_drop_function('is_null');
+py_drop_function('is_null')
+1
+SELECT COUNT(*) FROM mysql.lang_python_func;
+COUNT(*)
+0
+DROP TABLE mysql.lang_python_func;

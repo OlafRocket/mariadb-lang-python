@@ -1,0 +1,64 @@
+--echo #
+--echo # Argument type marshaling: verifies that SQL types are correctly
+--echo # mapped to Python types, matching C connector conventions.
+--echo #
+
+--echo # --- Signed vs unsigned integers ---
+--echo # Signed integers use PyLong_FromLongLong, unsigned use PyLong_FromUnsignedLongLong.
+SELECT py_eval('type(args[0]).__name__', 'VARCHAR', 42);
+SELECT py_eval('type(args[0]).__name__', 'VARCHAR', -1);
+SELECT py_eval('type(args[0]).__name__', 'VARCHAR', CAST(42 AS UNSIGNED));
+--echo # BIGINT UNSIGNED max: 2^64-1 = 18446744073709551615
+SELECT py_eval('args[0]', 'VARCHAR', CAST(18446744073709551615 AS UNSIGNED));
+SELECT py_eval('args[0] > 2**63', 'INT', CAST(18446744073709551615 AS UNSIGNED));
+--echo # Signed BIGINT boundary values
+SELECT py_eval('args[0]', 'VARCHAR', CAST(9223372036854775807 AS SIGNED));
+SELECT py_eval('args[0]', 'VARCHAR', CAST(-9223372036854775808 AS SIGNED));
+
+--echo # --- DECIMAL vs FLOAT distinction ---
+--echo # Bare decimal literals arrive as decimal.Decimal (lossless).
+--echo # Scientific notation or CAST(... AS DOUBLE) arrives as float.
+SELECT py_eval('type(args[0]).__name__', 'VARCHAR', 2.5);
+SELECT py_eval('type(args[0]).__name__', 'VARCHAR', 2.5e0);
+SELECT py_eval('type(args[0]).__name__', 'VARCHAR', CAST(2.5 AS DOUBLE));
+--echo # Decimal arithmetic preserves precision
+SELECT py_eval('str(args[0] + args[1])', 'VARCHAR', 0.1, 0.2);
+--echo # Float arithmetic has floating-point imprecision
+SELECT py_eval('str(args[0] + args[1])', 'VARCHAR', 0.1e0, 0.2e0);
+--echo # Decimal from DECIMAL column
+CREATE TABLE t1 (d DECIMAL(10,2));
+INSERT INTO t1 VALUES (3.14), (99.99);
+SELECT d, py_eval('type(args[0]).__name__', 'VARCHAR', d) AS python_type FROM t1;
+SELECT d, py_eval('str(args[0])', 'VARCHAR', d) AS python_value FROM t1;
+DROP TABLE t1;
+
+--echo # --- String vs binary distinction ---
+--echo # String literals and VARCHAR columns arrive as Python str.
+--echo # Hex literals, VARBINARY, UNHEX(), binary charset data arrive as Python bytes.
+SELECT py_eval('type(args[0]).__name__', 'VARCHAR', 'hello');
+SELECT py_eval('type(args[0]).__name__', 'VARCHAR', X'DEADBEEF');
+SELECT py_eval('type(args[0]).__name__', 'VARCHAR', UNHEX('48454C4C4F'));
+SELECT py_eval('type(args[0]).__name__', 'VARCHAR', CAST('hello' AS BINARY));
+--echo # Binary data from VARBINARY column
+CREATE TABLE t2 (v VARBINARY(100));
+INSERT INTO t2 VALUES (X'010203'), (UNHEX('AABBCC'));
+SELECT HEX(v), py_eval('type(args[0]).__name__', 'VARCHAR', v) AS python_type FROM t2;
+SELECT HEX(v), py_eval('args[0].hex()', 'VARCHAR', v) AS hex_value FROM t2;
+DROP TABLE t2;
+
+--echo # --- Integer from INT UNSIGNED column ---
+CREATE TABLE t3 (u BIGINT UNSIGNED);
+INSERT INTO t3 VALUES (0), (9223372036854775807), (18446744073709551615);
+SELECT u, py_eval('type(args[0]).__name__', 'VARCHAR', u) AS python_type FROM t3;
+SELECT u, py_eval('str(args[0])', 'VARCHAR', u) AS python_value FROM t3;
+DROP TABLE t3;
+
+--echo # --- Mixed types in one call ---
+SELECT py_eval('"|".join(type(a).__name__ for a in args)', 'VARCHAR',
+  42, 2.5, 2.5e0, 'text', X'FF');
+
+--echo # --- VECTOR column argument arrives as numpy.ndarray(float32) ---
+CREATE TABLE tv (v VECTOR(3));
+INSERT INTO tv VALUES (VEC_FromText('[1,2,3]')), (VEC_FromText('[0.5,-1,4]'));
+SELECT py_eval('type(args[0]).__name__ + ":" + str(args[0].dtype) + ":" + str(args[0].tolist())', 'VARCHAR', v) AS vec FROM tv;
+DROP TABLE tv;

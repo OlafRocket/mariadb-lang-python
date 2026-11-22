@@ -1,0 +1,118 @@
+#
+# NULL handling: all 6 levels
+#
+# --- Level 1: code/expr arg is NULL → SQL NULL silently ---
+SELECT py_eval(NULL, 'INT');
+py_eval(NULL, 'INT')
+NULL
+SELECT py_eval(NULL, 'VARCHAR');
+py_eval(NULL, 'VARCHAR')
+NULL
+SELECT py_exec(NULL, 'INT');
+py_exec(NULL, 'INT')
+NULL
+SELECT py_eval(NULL, 'INT') IS NULL AS is_null;
+is_null
+1
+# --- Level 2: type arg is NULL → error at prepare time ---
+SELECT py_eval('1', NULL);
+ERROR 42000: Incorrect argument type to variable 'type argument cannot be NULL'
+SELECT py_exec('result = 1', NULL);
+ERROR 42000: Incorrect argument type to variable 'type argument cannot be NULL'
+# --- Level 3: data arg is NULL → Python sees None ---
+SELECT py_eval('args[0] is None', 'VARCHAR', NULL);
+py_eval('args[0] is None', 'VARCHAR', NULL)
+True
+SELECT py_eval('str(type(args[0]))', 'VARCHAR', NULL);
+py_eval('str(type(args[0]))', 'VARCHAR', NULL)
+<class 'NoneType'>
+SELECT py_eval('args[0] is None and args[1] == 42', 'VARCHAR', NULL, 42);
+py_eval('args[0] is None and args[1] == 42', 'VARCHAR', NULL, 42)
+True
+# --- Level 3: NULL data arg with computation ---
+SELECT py_eval('0 if args[0] is None else args[0] * 2', 'INT', NULL);
+py_eval('0 if args[0] is None else args[0] * 2', 'INT', NULL)
+0
+SELECT py_eval('0 if args[0] is None else args[0] * 2', 'INT', 5);
+py_eval('0 if args[0] is None else args[0] * 2', 'INT', 5)
+10
+# --- Level 4: Python exception → SQL NULL + warning (lax mode) ---
+# Strict mode (the default) is exercised in errors.test; here we
+# verify the NULL-returning behaviour when strict mode is OFF.
+SET SESSION lang_python_strict_errors=OFF;
+SELECT py_eval('1/0', 'INT');
+py_eval('1/0', 'INT')
+NULL
+Warnings:
+Warning	1105	py_eval: ZeroDivisionError: division by zero
+SHOW WARNINGS;
+Level	Code	Message
+Warning	1105	py_eval: ZeroDivisionError: division by zero
+SELECT py_eval('undefined_var', 'INT');
+py_eval('undefined_var', 'INT')
+NULL
+Warnings:
+Warning	1105	py_eval: NameError: name 'undefined_var' is not defined
+SHOW WARNINGS;
+Level	Code	Message
+Warning	1105	py_eval: NameError: name 'undefined_var' is not defined
+SELECT py_exec('raise ValueError("test error")', 'INT');
+py_exec('raise ValueError("test error")', 'INT')
+NULL
+Warnings:
+Warning	1105	py_exec: ValueError: test error
+SHOW WARNINGS;
+Level	Code	Message
+Warning	1105	py_exec: ValueError: test error
+# --- Level 5: result absent or None → SQL NULL silently ---
+SELECT py_exec('x = 42', 'INT');
+py_exec('x = 42', 'INT')
+NULL
+SELECT py_exec('x = 42', 'INT') IS NULL AS is_null;
+is_null
+1
+SELECT py_exec('result = None', 'INT');
+py_exec('result = None', 'INT')
+NULL
+SELECT py_exec('result = None', 'INT') IS NULL AS is_null;
+is_null
+1
+SELECT py_eval('None', 'INT');
+py_eval('None', 'INT')
+NULL
+SELECT py_eval('None', 'INT') IS NULL AS is_null;
+is_null
+1
+# --- Level 6: type conversion failure → SQL NULL + warning (lax mode) ---
+# Strict mode is still off from the Level 4 section above.
+SELECT py_eval('"not_a_number"', 'INT');
+py_eval('"not_a_number"', 'INT')
+NULL
+Warnings:
+Warning	1105	py_eval: cannot convert result to INT, returning NULL
+SHOW WARNINGS;
+Level	Code	Message
+Warning	1105	py_eval: cannot convert result to INT, returning NULL
+SELECT py_eval('"not_a_number"', 'DOUBLE');
+py_eval('"not_a_number"', 'DOUBLE')
+NULL
+Warnings:
+Warning	1105	py_eval: cannot convert result to DOUBLE, returning NULL
+SHOW WARNINGS;
+Level	Code	Message
+Warning	1105	py_eval: cannot convert result to DOUBLE, returning NULL
+SET SESSION lang_python_strict_errors=DEFAULT;
+# --- NULL propagation in table context ---
+CREATE TABLE t1 (a INT);
+INSERT INTO t1 VALUES (1), (NULL), (3);
+SELECT a, py_eval('args[0] * 2 if args[0] is not None else None', 'INT', a) AS doubled FROM t1;
+a	doubled
+1	2
+NULL	NULL
+3	6
+SELECT a, py_eval('args[0] * 2 if args[0] is not None else None', 'INT', a) IS NULL AS is_null FROM t1;
+a	is_null
+1	0
+NULL	1
+3	0
+DROP TABLE t1;

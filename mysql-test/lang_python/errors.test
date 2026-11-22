@@ -1,0 +1,67 @@
+--echo #
+--echo # Error conditions (strict mode, default)
+--echo #
+--echo # With lang_python_strict_errors=ON (default), Python exceptions and
+--echo # result-conversion failures abort the query with ER_UNKNOWN_ERROR.
+--echo # See errors_lax.test for the opt-out (warning + NULL) behaviour.
+--echo #
+
+--echo # --- Wrong argument count ---
+--error ER_WRONG_PARAMCOUNT_TO_NATIVE_FCT
+SELECT py_eval('1');
+
+--error ER_WRONG_PARAMCOUNT_TO_NATIVE_FCT
+SELECT py_exec('1');
+
+--echo # --- Invalid type string ---
+--error ER_WRONG_VALUE_FOR_TYPE
+SELECT py_eval('1', 'DATETIME');
+
+--error ER_WRONG_VALUE_FOR_TYPE
+SELECT py_eval('1', 'BIGINT');
+
+--error ER_WRONG_VALUE_FOR_TYPE
+SELECT py_exec('result = 1', 'ARRAY');
+
+--echo # --- Python syntax error → query fails ---
+--error ER_UNKNOWN_ERROR
+SELECT py_eval('def', 'INT');
+
+--error ER_UNKNOWN_ERROR
+SELECT py_exec('if True', 'INT');
+
+--echo # --- Python runtime errors → query fails ---
+--error ER_UNKNOWN_ERROR
+SELECT py_eval('1/0', 'INT');
+
+--error ER_UNKNOWN_ERROR
+SELECT py_eval('[][99]', 'INT');
+
+--error ER_UNKNOWN_ERROR
+SELECT py_eval('int("abc")', 'INT');
+
+--error ER_UNKNOWN_ERROR
+SELECT py_exec('open("/nonexistent/file")', 'VARCHAR');
+
+--echo # --- Type conversion failures → query fails ---
+--echo # str object cannot be directly converted to INT by PyLong_AsLongLong
+--error ER_UNKNOWN_ERROR
+SELECT py_eval('"hello"', 'INT');
+
+--echo # list cannot be converted to DOUBLE
+--error ER_UNKNOWN_ERROR
+SELECT py_eval('[1,2,3]', 'DOUBLE');
+
+--echo # --- Successful call after a failed one (no leaked state) ---
+--error ER_UNKNOWN_ERROR
+SELECT py_eval('1/0', 'INT');
+SELECT py_eval('2 + 2', 'INT');
+
+--echo # --- Errors with table data: query aborts on the first failing row ---
+CREATE TABLE t1 (a INT);
+INSERT INTO t1 VALUES (1), (0), (2);
+
+--error ER_UNKNOWN_ERROR
+SELECT a, py_eval('10 / args[0]', 'INT', a) AS result FROM t1;
+
+DROP TABLE t1;

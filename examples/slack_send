@@ -1,0 +1,71 @@
+# Send a message to Slack.
+# In this example, we do this from a trigger, to notify the team about a big payment.
+#
+# The Python code lives in a named function: it is compiled once (py_exec inside
+# a trigger would recompile it for every row) and the trigger body stays small.
+# The message is composed at the call site, so the function is reusable.
+#
+# Replace the slack_webhook value with your own webhook URL before running.
+
+
+CREATE OR REPLACE SCHEMA xmp;
+USE xmp;
+
+CREATE OR REPLACE TABLE config (
+    name VARCHAR(100) NOT NULL,
+    value VARCHAR(100) NOT NULL,
+    PRIMARY KEY (name)
+);
+INSERT INTO config (name, value) VALUES
+    ('slack_webhook', 'https://hooks.slack.com/services/YOUR/WEBHOOK/PATH')
+;
+
+CREATE OR REPLACE TABLE received_payment (
+    id UUID DEFAULT UUID_v7(),
+    payer VARCHAR(100) NOT NULL,
+    amount INT UNSIGNED NOT NULL,
+    PRIMARY KEY (id)
+)
+    ENGINE InnoDB
+;
+
+SELECT py_replace_function('example_slack_send', 'BOOL', 'webhook_url,message', '
+    import urllib.request
+    import json
+    data = json.dumps({"text": message}).encode("utf-8")
+    request = urllib.request.Request(
+        webhook_url,
+        data=data,
+        headers={"Content-Type": "application/json"}
+    )
+    result = (urllib.request.urlopen(request).status == 200)
+');
+
+DELIMITER ||
+CREATE OR REPLACE FUNCTION get_config(IN p_name VARCHAR(100))
+    RETURNS VARCHAR(100)
+    READS SQL DATA
+    NOT DETERMINISTIC
+BEGIN
+    RETURN (
+        SELECT value FROM config WHERE name = p_name
+    );
+END ||
+
+CREATE OR REPLACE DEFINER=`root`@`localhost` TRIGGER ai_received_payment
+    AFTER INSERT ON received_payment
+    FOR EACH ROW
+BEGIN
+    IF NEW.amount > 1000 THEN
+        -- Triggers cannot return a resultset, so we use DO instead of SELECT.
+        DO py_call('example_slack_send',
+            get_config('slack_webhook'),
+            CONCAT('Mega payment received! *', NEW.payer, '* just paid *',
+                   NEW.amount, '* GBP!')
+        );
+    END IF;
+END ||
+DELIMITER ;
+
+INSERT INTO received_payment (payer, amount) VALUES ('Rockerduck',      5000000);
+INSERT INTO received_payment (payer, amount) VALUES ('Scrooge McDuck', 10000000);

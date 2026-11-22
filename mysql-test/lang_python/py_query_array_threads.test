@@ -1,0 +1,90 @@
+--source include/have_sequence.inc
+
+--echo #
+--echo # inhost.sql.query_array: KILL of the calling statement, concurrent use
+--echo #
+
+# The body inserts a marker row right before the long extraction, so the
+# KILL below is known to arrive while the internal statement is running
+# (waiting on the processlist alone can kill before the body starts).
+CREATE TABLE ready (n INT);
+
+--echo # --- KILL QUERY reaches the internal statement at the next row ---
+connect (con1,localhost,root,,test);
+let $id= `SELECT CONNECTION_ID()`;
+--send SELECT py_exec('import inhost\ninhost.sql.execute("INSERT INTO test.ready VALUES (1)")\nresult = len(inhost.sql.query_array("SELECT seq, SLEEP(0.001) AS z FROM test.seq_1_to_200000")["seq"])', 'INT') AS n
+
+connection default;
+let $wait_condition= SELECT COUNT(*) = 1 FROM ready WHERE n = 1;
+--source include/wait_condition.inc
+--disable_query_log
+eval KILL QUERY $id;
+--enable_query_log
+
+connection con1;
+# The interrupted internal statement surfaces as inhost.sql.Error, which
+# the body does not catch: py_exec reports the Python exception.
+--error ER_UNKNOWN_ERROR
+--reap
+SELECT 'con1 usable after KILL' AS state;
+SELECT py_exec('
+import inhost
+result = int(inhost.sql.query_array("SELECT seq FROM test.seq_1_to_10")["seq"].sum())
+', 'INT') AS works_again;
+
+--echo # --- a body may catch the interruption; the extraction still stops early ---
+--send SELECT py_exec('import inhost\ninhost.sql.execute("INSERT INTO test.ready VALUES (2)")\ntry:\n    inhost.sql.query_array("SELECT seq, SLEEP(0.001) AS z FROM test.seq_1_to_200000")\n    result = "finished"\nexcept inhost.sql.Error as e:\n    result = "caught"', 'VARCHAR') AS r
+
+connection default;
+let $wait_condition= SELECT COUNT(*) = 1 FROM ready WHERE n = 2;
+--source include/wait_condition.inc
+--disable_query_log
+eval KILL QUERY $id;
+--enable_query_log
+
+connection con1;
+--reap
+
+--echo # --- KILL QUERY also reaches query() ---
+--send SELECT py_exec('import inhost\ninhost.sql.execute("INSERT INTO test.ready VALUES (3)")\nresult = len(inhost.sql.query("SELECT seq, SLEEP(0.001) AS z FROM test.seq_1_to_200000"))', 'INT') AS n
+
+connection default;
+let $wait_condition= SELECT COUNT(*) = 1 FROM ready WHERE n = 3;
+--source include/wait_condition.inc
+--disable_query_log
+eval KILL QUERY $id;
+--enable_query_log
+
+connection con1;
+--error ER_UNKNOWN_ERROR
+--reap
+
+--echo # --- four connections extract at the same time ---
+connect (con2,localhost,root,,test);
+connect (con3,localhost,root,,test);
+connect (con4,localhost,root,,test);
+
+connection con1;
+--send SELECT py_exec('import inhost\nc = inhost.sql.query_array("SELECT seq, seq * 0.5e0 AS h FROM test.seq_1_to_400000")\nresult = str(len(c["seq"])) + " " + str(c["seq"].sum()) + " " + str(c["h"].sum())', 'VARCHAR') AS r1
+connection con2;
+--send SELECT py_exec('import inhost\nc = inhost.sql.query_array("SELECT seq, seq * 0.5e0 AS h FROM test.seq_1_to_300000")\nresult = str(len(c["seq"])) + " " + str(c["seq"].sum()) + " " + str(c["h"].sum())', 'VARCHAR') AS r2
+connection con3;
+--send SELECT py_exec('import inhost\nc = inhost.sql.query_array("SELECT seq, CONCAT(\'s\', seq) AS s FROM test.seq_1_to_200000")\nresult = str(len(c["seq"])) + " " + str(c["seq"].sum()) + " " + c["s"][-1]', 'VARCHAR') AS r3
+connection con4;
+--send SELECT py_exec('import inhost\nresult = str(len(inhost.sql.query("SELECT seq FROM test.seq_1_to_100000")))', 'VARCHAR') AS r4_text_path
+
+connection con1;
+--reap
+connection con2;
+--reap
+connection con3;
+--reap
+connection con4;
+--reap
+
+connection default;
+DROP TABLE ready;
+disconnect con1;
+disconnect con2;
+disconnect con3;
+disconnect con4;

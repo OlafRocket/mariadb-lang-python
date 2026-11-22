@@ -1,0 +1,307 @@
+#
+# py_agg (Phase 2): aggregate that calls a named Python function once
+# per group with one numpy array per argument
+#
+CREATE TABLE t1 (
+grp INT, id INT, d DOUBLE, dec1 DECIMAL(10,2), name VARCHAR(20),
+data BLOB, ub BIGINT UNSIGNED, v VECTOR(2)
+);
+INSERT INTO t1 VALUES
+(1, 1, 1.5,  10.25, 'alice', x'00FF', 1, VEC_FromText('[1,2]')),
+(1, 2, 2.5,  20.50, 'bob',   x'AB',   2, VEC_FromText('[3,4]')),
+(2, 3, 4.0,  30.00, 'carol', x'01',   3, VEC_FromText('[5,6]')),
+(2, 4, NULL, NULL,  NULL,    NULL,    4, VEC_FromText('[7,8]')),
+(2, 5, 6.0,  40.00, 'carol', x'02',   5, VEC_FromText('[9,10]'));
+# --- named parameters: one call per group, arrays cover the group ---
+SELECT py_create_function('describe', 'VARCHAR', 'ids,vals', '
+result = type(ids).__name__ + ":" + str(ids.dtype) + str(ids.tolist()) + " " + str(vals.dtype) + str(vals.tolist())
+');
+py_create_function('describe', 'VARCHAR', 'ids,vals', '
+result = type(ids).__name__ + ":" + str(ids.dtype) + str(ids.tolist()) + " " + str(vals.dtype) + str(vals.tolist())
+')
+1
+SELECT grp, py_agg('describe', id, d) AS a FROM t1 GROUP BY grp ORDER BY grp;
+grp	a
+1	ndarray:int64[1, 2] float64[1.5, 2.5]
+2	ndarray:int64[3, 4, 5] float64[4.0, nan, 6.0]
+SELECT py_agg('describe', id, d) AS whole_table FROM t1;
+whole_table
+ndarray:int64[1, 2, 3, 4, 5] float64[1.5, 2.5, 4.0, nan, 6.0]
+# --- args[] mode: a tuple of arrays ---
+SELECT py_create_function('describe_args', 'VARCHAR', NULL, '
+result = str(len(args)) + " " + ";".join(str(a.dtype) + str(a.shape) for a in args)
+');
+py_create_function('describe_args', 'VARCHAR', NULL, '
+result = str(len(args)) + " " + ";".join(str(a.dtype) + str(a.shape) for a in args)
+')
+1
+SELECT grp, py_agg('describe_args', id, d, name, v) AS a FROM t1 GROUP BY grp ORDER BY grp;
+grp	a
+1	4 int64(2,);float64(2,);object(2,);float32(2, 2)
+2	4 int64(3,);float64(3,);object(3,);float32(3, 2)
+# --- type mapping of the arguments ---
+SELECT py_create_function('types', 'VARCHAR', NULL, '
+result = "\\n".join(str(a.dtype) + " " + str(a.shape) + " " + ascii(a.tolist()) for a in args)
+');
+py_create_function('types', 'VARCHAR', NULL, '
+result = "\\n".join(str(a.dtype) + " " + str(a.shape) + " " + ascii(a.tolist()) for a in args)
+')
+1
+SELECT py_agg('types', id, ub, d, dec1, name, data, v) AS a FROM t1 WHERE grp = 1;
+a
+int64 (2,) [1, 2]
+uint64 (2,) [1, 2]
+float64 (2,) [1.5, 2.5]
+float64 (2,) [10.25, 20.5]
+object (2,) ['alice', 'bob']
+object (2,) [b'\x00\xff', b'\xab']
+float32 (2, 2) [[1.0, 2.0], [3.0, 4.0]]
+SELECT py_agg('types', d, dec1, name, data) AS nulls FROM t1 WHERE grp = 2;
+nulls
+float64 (3,) [4.0, nan, 6.0]
+float64 (3,) [30.0, nan, 40.0]
+object (3,) ['carol', None, 'carol']
+object (3,) [b'\x01', None, b'\x02']
+# --- return types follow the function declaration ---
+SELECT py_create_function('r_int', 'INT', 'x', 'result = int(x.sum())');
+py_create_function('r_int', 'INT', 'x', 'result = int(x.sum())')
+1
+SELECT py_create_function('r_double', 'DOUBLE', 'x', 'import numpy
+result = float(numpy.nanmean(x))');
+py_create_function('r_double', 'DOUBLE', 'x', 'import numpy
+result = float(numpy.nanmean(x))')
+1
+SELECT py_create_function('r_decimal', 'DECIMAL', 'x', 'import numpy
+result = str(round(float(numpy.nansum(x)), 2))');
+py_create_function('r_decimal', 'DECIMAL', 'x', 'import numpy
+result = str(round(float(numpy.nansum(x)), 2))')
+1
+SELECT py_create_function('r_bool', 'BOOL', 'x', 'result = bool((x > 3).any())');
+py_create_function('r_bool', 'BOOL', 'x', 'result = bool((x > 3).any())')
+1
+SELECT py_create_function('r_blob', 'BLOB', 'x', 'result = x.astype("uint8").tobytes()');
+py_create_function('r_blob', 'BLOB', 'x', 'result = x.astype("uint8").tobytes()')
+1
+SELECT grp, py_agg('r_int', id) AS i, py_agg('r_double', d) AS dbl,
+py_agg('r_decimal', dec1) AS dcm, py_agg('r_bool', id) AS b,
+HEX(py_agg('r_blob', id)) AS blb
+FROM t1 GROUP BY grp ORDER BY grp;
+grp	i	dbl	dcm	b	blb
+1	3	2	30.75	0	0102
+2	12	5	70.0	1	030405
+CREATE TABLE t2 AS
+SELECT grp, py_agg('r_int', id) AS i, py_agg('r_double', d) AS dbl,
+py_agg('r_decimal', dec1) AS dcm, py_agg('describe', id, d) AS s
+FROM t1 GROUP BY grp;
+SHOW CREATE TABLE t2;
+Table	Create Table
+t2	CREATE TABLE `t2` (
+  `grp` int(11) DEFAULT NULL,
+  `i` bigint(21) DEFAULT NULL,
+  `dbl` double DEFAULT NULL,
+  `dcm` decimal(64,38) DEFAULT NULL,
+  `s` longtext CHARACTER SET utf8mb3 COLLATE utf8mb3_general1400_as_ci DEFAULT NULL
+) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
+SELECT * FROM t2 ORDER BY grp;
+grp	i	dbl	dcm	s
+1	3	2	30.75000000000000000000000000000000000000	ndarray:int64[1, 2] float64[1.5, 2.5]
+2	12	5	70.00000000000000000000000000000000000000	ndarray:int64[3, 4, 5] float64[4.0, nan, 6.0]
+DROP TABLE t2;
+# --- several aggregates, expressions as arguments, HAVING, ORDER BY ---
+SELECT grp, py_agg('r_int', id * 10) AS s10, py_agg('r_int', id) + COUNT(*) AS mixed
+FROM t1 GROUP BY grp HAVING py_agg('r_int', id) > 3 ORDER BY py_agg('r_int', id) DESC;
+grp	s10	mixed
+2	120	15
+# --- empty input: SQL NULL, Python is not called ---
+SELECT py_agg('r_int', id) AS no_rows FROM t1 WHERE id < 0;
+no_rows
+NULL
+SELECT grp, py_agg('r_int', id) AS no_groups FROM t1 WHERE id < 0 GROUP BY grp;
+grp	no_groups
+# --- result None gives NULL ---
+SELECT py_create_function('r_none', 'INT', 'x', 'result = None');
+py_create_function('r_none', 'INT', 'x', 'result = None')
+1
+SELECT py_agg('r_none', id) AS n FROM t1;
+n
+NULL
+# --- DISTINCT and FILTER are applied by the server ---
+SELECT py_create_function('sorted_list', 'VARCHAR', 'x', 'result = str(sorted(x.tolist()))');
+py_create_function('sorted_list', 'VARCHAR', 'x', 'result = str(sorted(x.tolist()))')
+1
+SELECT py_agg('sorted_list', grp) AS all_rows, py_agg(DISTINCT 'sorted_list', grp) AS uniq FROM t1;
+all_rows	uniq
+[1, 1, 2, 2, 2]	[1, 2]
+SELECT grp, py_agg(DISTINCT 'sorted_list', name) AS uniq_names FROM t1 WHERE name IS NOT NULL GROUP BY grp ORDER BY grp;
+grp	uniq_names
+1	['alice', 'bob']
+2	['carol']
+SELECT py_agg('sorted_list', id) FILTER (WHERE id > 2) AS filtered,
+py_agg('sorted_list', id) AS unfiltered FROM t1;
+filtered	unfiltered
+[3, 4, 5]	[1, 2, 3, 4, 5]
+# --- window function: every frame is recomputed ---
+SELECT id, py_agg('sorted_list', id) OVER (PARTITION BY grp ORDER BY id) AS running,
+py_agg('sorted_list', id) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) AS sliding
+FROM t1 ORDER BY id;
+id	running	sliding
+1	[1]	[1, 2]
+2	[1, 2]	[1, 2, 3]
+3	[3]	[2, 3, 4]
+4	[3, 4]	[3, 4, 5]
+5	[3, 4, 5]	[4, 5]
+# --- VECTOR argument: 2-D float32 batch ---
+SELECT py_create_function('vec_mean', 'VARCHAR', 'm', 'result = str(m.shape) + " " + str(m.mean(axis=0).tolist())');
+py_create_function('vec_mean', 'VARCHAR', 'm', 'result = str(m.shape) + " " + str(m.mean(axis=0).tolist())')
+1
+SELECT grp, py_agg('vec_mean', v) AS a FROM t1 GROUP BY grp ORDER BY grp;
+grp	a
+1	(2, 2) [2.0, 3.0]
+2	(3, 2) [7.0, 8.0]
+# --- larger groups: 300000 rows in 3 groups ---
+SELECT seq MOD 3 AS g, py_agg('r_int', seq) AS s, SUM(seq) AS expected
+FROM seq_1_to_300000 GROUP BY seq MOD 3 ORDER BY g;
+g	s	expected
+0	15000150000	15000150000
+1	14999950000	14999950000
+2	15000050000	15000050000
+# --- prepared statement: executed twice, catalog change in between ---
+PREPARE st FROM "SELECT grp, py_agg('r_int', id) AS s FROM t1 GROUP BY grp ORDER BY grp";
+EXECUTE st;
+grp	s
+1	3
+2	12
+SELECT py_replace_function('r_int', 'INT', 'x', 'result = int(x.sum()) * 1000');
+py_replace_function('r_int', 'INT', 'x', 'result = int(x.sum()) * 1000')
+1
+EXECUTE st;
+grp	s
+1	3000
+2	12000
+SELECT py_replace_function('r_int', 'INT', 'x', 'result = int(x.sum())');
+py_replace_function('r_int', 'INT', 'x', 'result = int(x.sum())')
+1
+EXECUTE st;
+grp	s
+1	3
+2	12
+DEALLOCATE PREPARE st;
+# --- errors at prepare time ---
+SELECT py_agg('r_int') FROM t1;
+ERROR 42000: Incorrect parameter count in the call to native function 'py_agg'
+SELECT py_agg('no_such_function', id) FROM t1;
+ERROR HY000: py_agg: unknown Python function 'no_such_function'
+SELECT py_agg(name, id) FROM t1;
+ERROR HY000: py_agg: function name must be a string constant
+SELECT py_agg(NULL, id) FROM t1;
+ERROR HY000: py_agg: function name cannot be NULL
+SELECT py_agg('r_int', id, d) FROM t1;
+ERROR HY000: py_agg: function 'r_int' expects 1 arguments, got 2
+SELECT py_agg('r_int', SUM(id)) FROM t1;
+ERROR HY000: Invalid use of group function
+# --- errors at run time ---
+# NULL in an integer argument
+CREATE TABLE t3 (i INT, v VECTOR(2));
+INSERT INTO t3 VALUES (1, VEC_FromText('[1,2]')), (NULL, NULL);
+SELECT py_agg('r_int', i) FROM t3;
+ERROR HY000: py_agg: ValueError: NULL in integer column 'x'
+SELECT py_agg('r_int', i) FILTER (WHERE i IS NOT NULL) AS filtered FROM t3;
+filtered
+1
+# NULL in a VECTOR argument
+SELECT py_agg('vec_mean', v) FROM t3;
+ERROR HY000: py_agg: NULL in VECTOR argument 'm'
+DROP TABLE t3;
+# Python exception: strict function aborts, lax function gives NULL + warning
+SELECT py_create_function('boom_strict', 'INT', 'x', 'result = 1 // 0');
+py_create_function('boom_strict', 'INT', 'x', 'result = 1 // 0')
+1
+SELECT py_create_function('boom_lax', 'INT', 'x', 'result = 1 // 0', 0);
+py_create_function('boom_lax', 'INT', 'x', 'result = 1 // 0', 0)
+1
+SELECT py_agg('boom_strict', id) FROM t1;
+ERROR HY000: py_agg: ZeroDivisionError: division by zero
+SELECT py_agg('boom_lax', id) AS lax FROM t1;
+lax
+NULL
+Warnings:
+Warning	1105	py_agg: ZeroDivisionError: division by zero
+# --- lang_python_agg_max_mem bounds one group ---
+SELECT @@lang_python_agg_max_mem;
+@@lang_python_agg_max_mem
+268435456
+SET SESSION lang_python_agg_max_mem = 4096;
+SELECT py_agg('r_int', seq) AS fits FROM seq_1_to_500;
+fits
+125250
+SELECT py_agg('r_int', seq) FROM seq_1_to_5000;
+ERROR HY000: py_agg: group exceeds lang_python_agg_max_mem (4096 bytes)
+SELECT seq MOD 100 AS g, py_agg('r_int', seq) AS small_groups_fit
+FROM seq_1_to_5000 GROUP BY seq MOD 100 ORDER BY g LIMIT 2;
+g	small_groups_fit
+0	127500
+1	122550
+SET SESSION lang_python_agg_max_mem = DEFAULT;
+# --- the function is called once per group ---
+SELECT py_create_function('counted', 'INT', 'x', '
+import sys
+sys.modules.setdefault("__main__").__dict__["py_agg_calls"] = sys.modules["__main__"].__dict__.get("py_agg_calls", 0) + 1
+result = len(x)
+');
+py_create_function('counted', 'INT', 'x', '
+import sys
+sys.modules.setdefault("__main__").__dict__["py_agg_calls"] = sys.modules["__main__"].__dict__.get("py_agg_calls", 0) + 1
+result = len(x)
+')
+1
+SELECT grp, py_agg('counted', id) AS n FROM t1 GROUP BY grp ORDER BY grp;
+grp	n
+1	2
+2	3
+SELECT py_eval('__import__("sys").modules["__main__"].__dict__.pop("py_agg_calls")', 'INT') AS calls;
+calls
+2
+SELECT py_drop_function('describe');
+py_drop_function('describe')
+1
+SELECT py_drop_function('describe_args');
+py_drop_function('describe_args')
+1
+SELECT py_drop_function('types');
+py_drop_function('types')
+1
+SELECT py_drop_function('r_int');
+py_drop_function('r_int')
+1
+SELECT py_drop_function('r_double');
+py_drop_function('r_double')
+1
+SELECT py_drop_function('r_decimal');
+py_drop_function('r_decimal')
+1
+SELECT py_drop_function('r_bool');
+py_drop_function('r_bool')
+1
+SELECT py_drop_function('r_blob');
+py_drop_function('r_blob')
+1
+SELECT py_drop_function('r_none');
+py_drop_function('r_none')
+1
+SELECT py_drop_function('sorted_list');
+py_drop_function('sorted_list')
+1
+SELECT py_drop_function('vec_mean');
+py_drop_function('vec_mean')
+1
+SELECT py_drop_function('boom_strict');
+py_drop_function('boom_strict')
+1
+SELECT py_drop_function('boom_lax');
+py_drop_function('boom_lax')
+1
+SELECT py_drop_function('counted');
+py_drop_function('counted')
+1
+DROP TABLE t1;
+DROP TABLE mysql.lang_python_func;

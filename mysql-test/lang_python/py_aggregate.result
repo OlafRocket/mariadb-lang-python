@@ -1,0 +1,508 @@
+#
+# Python aggregates (Phase 2): catalog kind 'aggregate', a class with
+# step()/finalize() that py_agg feeds one chunk of rows at a time
+#
+CREATE TABLE t1 (grp INT, id INT, d DOUBLE, name VARCHAR(20), v VECTOR(2));
+INSERT INTO t1 VALUES
+(1, 1, 1.5,  'alice', VEC_FromText('[1,2]')),
+(1, 2, 2.5,  'bob',   VEC_FromText('[3,4]')),
+(2, 3, 4.0,  'carol', VEC_FromText('[5,6]')),
+(2, 4, NULL, NULL,    VEC_FromText('[7,8]')),
+(2, 5, 6.0,  'carol', VEC_FromText('[9,10]'));
+# --- create; the catalog records the kind ---
+SELECT py_create_aggregate('a_sum', 'INT', 'x', '
+class Aggregate:
+    def __init__(self):
+        self.total = 0
+    def step(self, x):
+        self.total += int(x.sum())
+    def finalize(self):
+        return self.total
+');
+py_create_aggregate('a_sum', 'INT', 'x', '
+class Aggregate:
+    def __init__(self):
+        self.total = 0
+    def step(self, x):
+        self.total += int(x.sum())
+    def finalize(self):
+        return self.total
+')
+1
+SELECT py_create_function('f_sum', 'INT', 'x', 'result = int(x.sum())');
+py_create_function('f_sum', 'INT', 'x', 'result = int(x.sum())')
+1
+SELECT name, kind, return_type, param_names FROM mysql.lang_python_func ORDER BY name;
+name	kind	return_type	param_names
+a_sum	aggregate	INT	x
+f_sum	function	INT	x
+# --- one instance per group ---
+SELECT grp, py_agg('a_sum', id) AS s FROM t1 GROUP BY grp ORDER BY grp;
+grp	s
+1	3
+2	12
+SELECT py_agg('a_sum', id) AS whole_table FROM t1;
+whole_table
+15
+# --- step() sees arrays of at most lang_python_agg_chunk_rows rows ---
+SELECT @@lang_python_agg_chunk_rows;
+@@lang_python_agg_chunk_rows
+65536
+SELECT py_create_aggregate('a_trace', 'VARCHAR', 'x,y', '
+class Aggregate:
+    def __init__(self):
+        self.calls = []
+    def step(self, x, y):
+        self.calls.append(type(x).__name__ + ":" + str(x.dtype) + str(x.tolist()) + "/" + str(y.dtype) + str(y.tolist()))
+    def finalize(self):
+        return " | ".join(self.calls)
+');
+py_create_aggregate('a_trace', 'VARCHAR', 'x,y', '
+class Aggregate:
+    def __init__(self):
+        self.calls = []
+    def step(self, x, y):
+        self.calls.append(type(x).__name__ + ":" + str(x.dtype) + str(x.tolist()) + "/" + str(y.dtype) + str(y.to
+1
+SELECT py_agg('a_trace', id, d) AS default_chunk FROM t1;
+default_chunk
+ndarray:int64[1, 2, 3, 4, 5]/float64[1.5, 2.5, 4.0, nan, 6.0]
+SET SESSION lang_python_agg_chunk_rows = 2;
+SELECT py_agg('a_trace', id, d) AS chunk_2 FROM t1;
+chunk_2
+ndarray:int64[1, 2]/float64[1.5, 2.5] | ndarray:int64[3, 4]/float64[4.0, nan] | ndarray:int64[5]/float64[6.0]
+SELECT grp, py_agg('a_trace', id, d) AS chunk_2_grouped FROM t1 GROUP BY grp ORDER BY grp;
+grp	chunk_2_grouped
+1	ndarray:int64[1, 2]/float64[1.5, 2.5]
+2	ndarray:int64[3, 4]/float64[4.0, nan] | ndarray:int64[5]/float64[6.0]
+SET SESSION lang_python_agg_chunk_rows = 1;
+SELECT py_agg('a_trace', id, d) AS chunk_1 FROM t1;
+chunk_1
+ndarray:int64[1]/float64[1.5] | ndarray:int64[2]/float64[2.5] | ndarray:int64[3]/float64[4.0] | ndarray:int64[4]/float64[nan] | ndarray:int64[5]/float64[6.0]
+SET SESSION lang_python_agg_chunk_rows = DEFAULT;
+# --- the result does not depend on the chunk size ---
+SELECT py_create_aggregate('a_stats', 'VARCHAR', 'x', '
+import numpy
+class Aggregate:
+    def __init__(self):
+        self.n = 0
+        self.total = 0.0
+        self.lo = None
+        self.hi = None
+        self.steps = 0
+    def step(self, x):
+        self.steps += 1
+        self.n += len(x)
+        self.total += float(x.sum())
+        self.lo = float(x.min()) if self.lo is None else min(self.lo, float(x.min()))
+        self.hi = float(x.max()) if self.hi is None else max(self.hi, float(x.max()))
+    def finalize(self):
+        return "n=%d sum=%.1f min=%.1f max=%.1f" % (self.n, self.total, self.lo, self.hi)
+');
+py_create_aggregate('a_stats', 'VARCHAR', 'x', '
+import numpy
+class Aggregate:
+    def __init__(self):
+        self.n = 0
+        self.total = 0.0
+        self.lo = None
+        self.hi = None
+        self.steps = 0
+    def step(self, x):
+        self.ste
+1
+SELECT py_agg('a_stats', seq * 0.5e0) AS chunk_default FROM seq_1_to_100000;
+chunk_default
+n=100000 sum=2500025000.0 min=0.5 max=50000.0
+SET SESSION lang_python_agg_chunk_rows = 7;
+SELECT py_agg('a_stats', seq * 0.5e0) AS chunk_7 FROM seq_1_to_100000;
+chunk_7
+n=100000 sum=2500025000.0 min=0.5 max=50000.0
+SET SESSION lang_python_agg_chunk_rows = 1000;
+SELECT seq MOD 3 AS g, py_agg('a_stats', seq * 0.5e0) AS chunk_1000,
+COUNT(*) AS n, SUM(seq * 0.5e0) AS total
+FROM seq_1_to_100000 GROUP BY seq MOD 3 ORDER BY g;
+g	chunk_1000	n	total
+0	n=33333 sum=833341666.5 min=1.5 max=49999.5	33333	833341666.5
+1	n=33334 sum=833358333.5 min=0.5 max=50000.0	33334	833358333.5
+2	n=33333 sum=833325000.0 min=1.0 max=49999.0	33333	833325000
+SET SESSION lang_python_agg_chunk_rows = DEFAULT;
+# --- a group larger than lang_python_agg_max_mem: only an aggregate can do it ---
+SET SESSION lang_python_agg_max_mem = 65536;
+SET SESSION lang_python_agg_chunk_rows = 4096;
+SELECT py_agg('f_sum', seq) FROM seq_1_to_1000000;
+ERROR HY000: py_agg: group exceeds lang_python_agg_max_mem (65536 bytes)
+SELECT py_agg('a_sum', seq) AS s, 1000000 * 1000001 DIV 2 AS expected FROM seq_1_to_1000000;
+s	expected
+500000500000	500000500000
+# a chunk that itself exceeds the limit still fails
+SET SESSION lang_python_agg_chunk_rows = 1000000;
+SELECT py_agg('a_sum', seq) FROM seq_1_to_1000000;
+ERROR HY000: py_agg: group exceeds lang_python_agg_max_mem (65536 bytes)
+SET SESSION lang_python_agg_max_mem = DEFAULT;
+SET SESSION lang_python_agg_chunk_rows = DEFAULT;
+# --- args[] mode: step(self, *cols) ---
+SELECT py_create_aggregate('a_shapes', 'VARCHAR', NULL, '
+class Aggregate:
+    def __init__(self):
+        self.out = []
+    def step(self, *cols):
+        self.out.append(";".join(str(c.dtype) + str(c.shape) for c in cols))
+    def finalize(self):
+        return " | ".join(self.out)
+');
+py_create_aggregate('a_shapes', 'VARCHAR', NULL, '
+class Aggregate:
+    def __init__(self):
+        self.out = []
+    def step(self, *cols):
+        self.out.append(";".join(str(c.dtype) + str(c.shape) for c in cols))
+    def finalize(self):
+        retur
+1
+SELECT py_agg('a_shapes', id, d, name, v) AS a FROM t1;
+a
+int64(5,);float64(5,);object(5,);float32(5, 2)
+# --- return types, NULL results, empty input ---
+SELECT py_create_aggregate('a_mean', 'DOUBLE', 'x', '
+import numpy
+class Aggregate:
+    def __init__(self):
+        self.n = 0
+        self.total = 0.0
+    def step(self, x):
+        ok = x[~numpy.isnan(x)]
+        self.n += len(ok)
+        self.total += float(ok.sum())
+    def finalize(self):
+        return self.total / self.n if self.n else None
+');
+py_create_aggregate('a_mean', 'DOUBLE', 'x', '
+import numpy
+class Aggregate:
+    def __init__(self):
+        self.n = 0
+        self.total = 0.0
+    def step(self, x):
+        ok = x[~numpy.isnan(x)]
+        self.n += len(ok)
+        self.total += float(o
+1
+SELECT grp, py_agg('a_mean', d) AS m FROM t1 GROUP BY grp ORDER BY grp;
+grp	m
+1	2
+2	5
+SELECT py_agg('a_mean', d) AS all_null FROM t1 WHERE d IS NULL;
+all_null
+NULL
+SELECT py_agg('a_mean', d) AS no_rows FROM t1 WHERE id < 0;
+no_rows
+NULL
+CREATE TABLE t2 AS SELECT grp, py_agg('a_mean', d) AS m, py_agg('a_trace', id, d) AS t FROM t1 GROUP BY grp;
+SHOW CREATE TABLE t2;
+Table	Create Table
+t2	CREATE TABLE `t2` (
+  `grp` int(11) DEFAULT NULL,
+  `m` double DEFAULT NULL,
+  `t` longtext CHARACTER SET utf8mb3 COLLATE utf8mb3_general1400_as_ci DEFAULT NULL
+) ENGINE=MyISAM DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
+DROP TABLE t2;
+# --- DISTINCT, FILTER, HAVING, several aggregates per statement ---
+SELECT py_agg('a_sum', grp) AS all_rows, py_agg(DISTINCT 'a_sum', grp) AS uniq,
+py_agg('a_sum', id) FILTER (WHERE id > 2) AS filtered,
+py_agg('f_sum', id) AS whole_group_function
+FROM t1;
+all_rows	uniq	filtered	whole_group_function
+8	3	12	15
+SELECT grp, py_agg('a_sum', id) AS s FROM t1 GROUP BY grp HAVING py_agg('a_sum', id) > 3;
+grp	s
+2	12
+# --- window frames: recomputed per row; running frames call finalize() repeatedly ---
+SET SESSION lang_python_agg_chunk_rows = 2;
+SELECT id, py_agg('a_sum', id) OVER (ORDER BY id) AS running,
+py_agg('a_sum', id) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) AS sliding,
+py_agg('a_sum', id) OVER (PARTITION BY grp) AS per_partition
+FROM t1 ORDER BY id;
+id	running	sliding	per_partition
+1	1	3	3
+2	3	6	3
+3	6	9	12
+4	10	12	12
+5	15	9	12
+SET SESSION lang_python_agg_chunk_rows = DEFAULT;
+# --- the body runs once per statement, the class is instantiated per group ---
+SELECT py_create_aggregate('a_count_inits', 'VARCHAR', 'x', '
+body_runs = globals().get("body_runs", 0) + 1
+instances = [0]
+class Aggregate:
+    def __init__(self):
+        instances[0] += 1
+        self.id = instances[0]
+    def step(self, x):
+        pass
+    def finalize(self):
+        return "body_runs=%d instance=%d" % (body_runs, self.id)
+');
+py_create_aggregate('a_count_inits', 'VARCHAR', 'x', '
+body_runs = globals().get("body_runs", 0) + 1
+instances = [0]
+class Aggregate:
+    def __init__(self):
+        instances[0] += 1
+        self.id = instances[0]
+    def step(self, x):
+        pass
+    
+1
+SELECT grp, py_agg('a_count_inits', id) AS a FROM t1 GROUP BY grp ORDER BY grp;
+grp	a
+1	body_runs=1 instance=1
+2	body_runs=1 instance=2
+# --- prepared statement across py_replace_aggregate ---
+PREPARE st FROM "SELECT grp, py_agg('a_sum', id) AS s FROM t1 GROUP BY grp ORDER BY grp";
+EXECUTE st;
+grp	s
+1	3
+2	12
+SELECT py_replace_aggregate('a_sum', 'INT', 'x', '
+class Aggregate:
+    def __init__(self):
+        self.total = 0
+    def step(self, x):
+        self.total += int(x.sum()) * 100
+    def finalize(self):
+        return self.total
+');
+py_replace_aggregate('a_sum', 'INT', 'x', '
+class Aggregate:
+    def __init__(self):
+        self.total = 0
+    def step(self, x):
+        self.total += int(x.sum()) * 100
+    def finalize(self):
+        return self.total
+')
+1
+EXECUTE st;
+grp	s
+1	300
+2	1200
+DEALLOCATE PREPARE st;
+# --- kinds share one namespace ---
+SELECT py_create_aggregate('f_sum', 'INT', 'x', 'class Aggregate: pass');
+ERROR HY000: py_create_aggregate: function 'f_sum' already exists (use py_replace_aggregate)
+SELECT py_create_function('a_sum', 'INT', 'x', 'result = 1');
+ERROR HY000: py_create_function: function 'a_sum' already exists (use py_replace_function)
+SELECT py_call('a_sum', 1);
+ERROR HY000: py_call: 'a_sum' is an aggregate (use py_agg)
+# replace may change the kind, in both directions
+SELECT py_replace_function('a_shapes', 'INT', 'x', 'result = len(x)');
+py_replace_function('a_shapes', 'INT', 'x', 'result = len(x)')
+1
+SELECT py_agg('a_shapes', id) AS now_a_function FROM t1;
+now_a_function
+5
+SELECT py_call('a_shapes', 'abc') AS callable_too;
+callable_too
+3
+SELECT py_replace_aggregate('a_shapes', 'INT', 'x', '
+class Aggregate:
+    def __init__(self):
+        self.n = 0
+    def step(self, x):
+        self.n += len(x)
+    def finalize(self):
+        return self.n
+');
+py_replace_aggregate('a_shapes', 'INT', 'x', '
+class Aggregate:
+    def __init__(self):
+        self.n = 0
+    def step(self, x):
+        self.n += len(x)
+    def finalize(self):
+        return self.n
+')
+1
+SELECT py_agg('a_shapes', id) AS an_aggregate_again FROM t1;
+an_aggregate_again
+5
+SELECT name, kind FROM mysql.lang_python_func WHERE name IN ('a_shapes', 'a_sum', 'f_sum') ORDER BY name;
+name	kind
+a_shapes	aggregate
+a_sum	aggregate
+f_sum	function
+# --- errors at create and prepare time ---
+SELECT py_create_aggregate('a_bad', 'INT', 'x', 'class Aggregate
+    pass');
+ERROR HY000: py_create_aggregate: a_bad: SyntaxError: expected ':' (<lang_python>, line 1)
+SELECT py_create_aggregate('a_bad', 'NOPE', 'x', 'class Aggregate: pass');
+ERROR HY000: Incorrect type value: 'NOPE' for function py_create_aggregate
+SELECT py_agg('a_sum', id, d) FROM t1;
+ERROR HY000: py_agg: function 'a_sum' expects 1 arguments, got 2
+# --- errors at run time: strict aborts ---
+SELECT py_create_aggregate('a_noclass', 'INT', 'x', 'x = 1');
+py_create_aggregate('a_noclass', 'INT', 'x', 'x = 1')
+1
+SELECT py_agg('a_noclass', id) FROM t1;
+ERROR HY000: py_agg: TypeError: aggregate 'a_noclass' does not define a class named Aggregate
+SELECT py_create_aggregate('a_nostep', 'INT', 'x', '
+class Aggregate:
+    def finalize(self):
+        return 1
+');
+py_create_aggregate('a_nostep', 'INT', 'x', '
+class Aggregate:
+    def finalize(self):
+        return 1
+')
+1
+SELECT py_agg('a_nostep', id) FROM t1;
+ERROR HY000: py_agg: AttributeError: 'Aggregate' object has no attribute 'step'
+SELECT py_create_aggregate('a_boom_body', 'INT', 'x', 'raise RuntimeError("body")');
+py_create_aggregate('a_boom_body', 'INT', 'x', 'raise RuntimeError("body")')
+1
+SELECT py_agg('a_boom_body', id) FROM t1;
+ERROR HY000: py_agg: RuntimeError: body
+SELECT py_create_aggregate('a_boom', 'INT', 'x,where', '
+class Aggregate:
+    def __init__(self):
+        self.n = 0
+        self.where = None
+    def step(self, x, where):
+        self.where = where[0]
+        if self.where == "init":
+            raise RuntimeError("never reached")
+        if self.where == "step":
+            raise RuntimeError("in step")
+        self.n += len(x)
+    def finalize(self):
+        if self.where == "finalize":
+            raise RuntimeError("in finalize")
+        return self.n
+');
+py_create_aggregate('a_boom', 'INT', 'x,where', '
+class Aggregate:
+    def __init__(self):
+        self.n = 0
+        self.where = None
+    def step(self, x, where):
+        self.where = where[0]
+        if self.where == "init":
+            raise RuntimeE
+1
+SELECT py_agg('a_boom', id, 'ok') AS fine FROM t1;
+fine
+5
+SELECT py_agg('a_boom', id, 'step') FROM t1;
+ERROR HY000: py_agg: RuntimeError: in step
+SELECT py_agg('a_boom', id, 'finalize') FROM t1;
+ERROR HY000: py_agg: RuntimeError: in finalize
+# NULL in an integer argument
+SELECT py_agg('a_sum', IF(id = 2, NULL, id)) FROM t1;
+ERROR HY000: py_agg: ValueError: NULL in integer column 'x'
+# --- errors at run time: lax gives NULL for the failing group only ---
+SELECT py_create_aggregate('a_boom_lax', 'INT', 'x', '
+class Aggregate:
+    def __init__(self):
+        self.n = 0
+    def step(self, x):
+        if (x == 4).any():
+            raise RuntimeError("row 4")
+        self.n += len(x)
+    def finalize(self):
+        return self.n
+', 0);
+py_create_aggregate('a_boom_lax', 'INT', 'x', '
+class Aggregate:
+    def __init__(self):
+        self.n = 0
+    def step(self, x):
+        if (x == 4).any():
+            raise RuntimeError("row 4")
+        self.n += len(x)
+    def finalize(self):
+        
+1
+SET SESSION lang_python_agg_chunk_rows = 1;
+SELECT grp, py_agg('a_boom_lax', id) AS n FROM t1 GROUP BY grp ORDER BY grp;
+grp	n
+1	2
+2	NULL
+Warnings:
+Warning	1105	py_agg: RuntimeError: row 4
+SET SESSION lang_python_agg_chunk_rows = DEFAULT;
+# --- drop: py_drop_function drops either kind ---
+SELECT py_drop_function('a_sum');
+py_drop_function('a_sum')
+1
+SELECT py_agg('a_sum', id) FROM t1;
+ERROR HY000: py_agg: unknown Python function 'a_sum'
+SELECT py_drop_function('f_sum');
+py_drop_function('f_sum')
+1
+SELECT py_drop_function('a_trace');
+py_drop_function('a_trace')
+1
+SELECT py_drop_function('a_stats');
+py_drop_function('a_stats')
+1
+SELECT py_drop_function('a_shapes');
+py_drop_function('a_shapes')
+1
+SELECT py_drop_function('a_mean');
+py_drop_function('a_mean')
+1
+SELECT py_drop_function('a_count_inits');
+py_drop_function('a_count_inits')
+1
+SELECT py_drop_function('a_noclass');
+py_drop_function('a_noclass')
+1
+SELECT py_drop_function('a_nostep');
+py_drop_function('a_nostep')
+1
+SELECT py_drop_function('a_boom_body');
+py_drop_function('a_boom_body')
+1
+SELECT py_drop_function('a_boom');
+py_drop_function('a_boom')
+1
+SELECT py_drop_function('a_boom_lax');
+py_drop_function('a_boom_lax')
+1
+SELECT COUNT(*) FROM mysql.lang_python_func;
+COUNT(*)
+0
+DROP TABLE t1;
+# --- an aggregate survives a restart as an aggregate ---
+SELECT py_create_aggregate('new_agg', 'INT', 'x', '
+class Aggregate:
+    def __init__(self):
+        self.n = 0
+    def step(self, x):
+        self.n += len(x)
+    def finalize(self):
+        return self.n
+');
+py_create_aggregate('new_agg', 'INT', 'x', '
+class Aggregate:
+    def __init__(self):
+        self.n = 0
+    def step(self, x):
+        self.n += len(x)
+    def finalize(self):
+        return self.n
+')
+1
+SELECT py_agg('new_agg', seq) AS n FROM seq_1_to_10;
+n
+10
+# restart
+SELECT py_agg('new_agg', seq) AS n_after_restart FROM seq_1_to_10;
+n_after_restart
+10
+SELECT py_drop_function('new_agg');
+py_drop_function('new_agg')
+1
+DROP TABLE mysql.lang_python_func;

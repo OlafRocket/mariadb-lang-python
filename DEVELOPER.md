@@ -1,0 +1,111 @@
+# lang_python Developer Guide
+
+Build prerequisites, CMake options, the server version pin and the
+container build are in [BUILD.md](BUILD.md). This page covers the source
+layout, the development loop and the tests.
+
+## Source layout
+
+| File | Content |
+|---|---|
+| `plugin.cc` | `maria_declare_plugin` block: the daemon plugin and one function plugin per SQL function |
+| `lang_python.cc`, `lang_python.h` | Interpreter start and stop, system variables, numpy API initialisation |
+| `item_func_python.cc`, `.h` | `py_eval`, `py_exec`; return type parsing shared by all functions |
+| `item_func_py_named.cc`, `.h` | `py_call` and the management functions (`py_create_function`, `py_replace_function`, `py_drop_function`, `py_create_aggregate`, `py_replace_aggregate`) |
+| `py_func_catalog.cc`, `.h` | Catalog table `mysql.lang_python_func` and its in-memory cache of compiled bodies |
+| `item_sum_py_agg.cc`, `.h` | `py_agg`: native aggregate function plugin (`Item_sum_plugin`), whole-group and chunked modes |
+| `py_inhost_module.cc`, `.h` | Built-in Python module `inhost` (`inhost.sql.query`, `query_sets`, `execute`, `query_array`): parameters and Python result objects (`inhost.sql.Rows`) |
+| `py_inhost_rowsink.cc`, `.h` | Row sink that executes every `inhost.sql` statement: private THD plus a `Protocol` subclass; column buffer types shared with `py_agg` |
+| `py_columns.cc`, `.h` | Column buffer to numpy array conversion, shared by `query_array` and `py_agg` |
+| `marshal.cc`, `unmarshal.cc` | SQL value to Python object and back, for scalar calls |
+| `py_numpy.h` | The one include for the numpy C API; every source file that uses numpy includes it |
+| `mysql-test/lang_python/` | MTR suite |
+| `bench/` | Benchmark harness ([bench/README.md](bench/README.md)) |
+| `docs/` | Design notes |
+
+## Design notes
+
+| Document | Topic |
+|---|---|
+| [ROADMAP.md](ROADMAP.md) | Phases and their status |
+| [docs/NAMED_FUNCTIONS.md](docs/NAMED_FUNCTIONS.md) | Named functions and the catalog |
+| [docs/BULK_DATA.md](docs/BULK_DATA.md) | `query_array` and `py_agg` |
+| [docs/AGGREGATE_PROTOCOL.md](docs/AGGREGATE_PROTOCOL.md) | Python aggregates (`step` / `finalize`) |
+
+## Build trees
+
+The plugin is built inside a MariaDB server tree at the pinned commit
+(see [BUILD.md](BUILD.md), Repo layout). Two build trees are used:
+
+| Tree | Configuration | Purpose |
+|---|---|---|
+| Release with debug info | `-DCMAKE_BUILD_TYPE=RelWithDebInfo` | Daily work, timing |
+| Debug | `-DCMAKE_BUILD_TYPE=Debug` | Server assertions active; catches misuse of server internals that the other tree accepts silently |
+
+Configure with `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON` to get
+`compile_commands.json` for IDE code navigation (VSCode:
+`"C_Cpp.default.compileCommands": "<build-dir>/compile_commands.json"`).
+
+Rebuild only the plugin, with an explicit job count:
+
+```bash
+cmake --build <build-dir> -j <jobs> --target lang_python
+```
+
+## Tests
+
+```bash
+cd <build-dir>/mysql-test
+perl mariadb-test-run.pl --suite=lang_python --force
+perl mariadb-test-run.pl --suite=lang_python --record <test>    # new or changed test
+```
+
+Run the suite in both build trees before committing. `--repeat=N
+--parallel=2` exposes timing-dependent failures in the tests that use
+several connections.
+
+| Test | Covers |
+|---|---|
+| `py_eval`, `py_exec` | Inline functions; `py_exec` compile cache |
+| `arg_types`, `null_handling` | Argument marshaling (including VECTOR to numpy), NULL levels |
+| `errors`, `errors_lax` | Strict and lax error handling |
+| `settings` | System variables, numpy availability |
+| `py_named` | Named functions and the catalog |
+| `py_inhost` | `inhost.sql.query` / `query_sets` / `execute`: cell types, column names, parameters, several result sets, session separation |
+| `py_query_array`, `py_query_array_threads` | `query_array`: types, NULLs, parameters, errors; KILL (also of `query`) and concurrent connections |
+| `py_agg`, `py_agg_threads` | `py_agg` with functions: types, DISTINCT, FILTER, windows, limits; KILL and concurrent connections |
+| `py_aggregate` | Python aggregates: chunking, kinds, errors, restart |
+
+Conventions:
+
+- A test that creates a named function or aggregate ends with
+  `DROP TABLE mysql.lang_python_func;` so MTR's check of the `mysql`
+  schema passes.
+- A test that needs another connection to act while a Python body runs
+  has the body insert a marker row first and waits for that row; waiting
+  on the processlist alone can act before the body starts.
+
+## Benchmarks
+
+```bash
+bench/run.sh -b <release-build-dir> -l before     # on the commit before
+bench/run.sh -b <release-build-dir> -l after      # on the change
+bench/compare.sh bench/results/before.csv bench/results/after.csv
+```
+
+A change made for performance states its before and after figures from
+this harness in the commit message. Cases, options and method:
+[bench/README.md](bench/README.md).
+
+## Server internals the plugin depends on
+
+The plugin compiles against internal server classes, so a move of the
+server pin can break the build or change behaviour without a compile
+error. Places to re-check:
+
+| Area | Dependency |
+|---|---|
+| All SQL functions | `Create_native_func`, `Plugin_function`, `Item_func_hybrid_field_type` |
+| `py_agg` | `Item_sum_plugin` (`add_row`, `aggregation_arg`, `supports_removal`), `Item_args::set_arguments()` to install several arguments |
+| `inhost.sql` (`query`, `query_sets`, `execute`, `query_array`) | `Ed_connection::execute_direct(Protocol *, LEX_STRING)`, the THD setup copied from `mysql_real_connect_local()`, `Protocol::store_*()` dispatch, `select_send::send_data()` calling `prepare_for_resend()` per row (details in `py_inhost_rowsink.cc`) |
+| Catalog | Plugin SQL service (`mysql_real_connect_local`) |

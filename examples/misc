@@ -1,0 +1,32 @@
+# In SQL you can't get the type of a variable, here's a partial workaround.
+# Won't work with time types.
+SELECT py_replace_function('example_type_of', 'VARCHAR', 'v', '
+    result = type(v).__name__
+');
+
+SET @var = 1.0;
+SELECT py_call('example_type_of', @var) AS t;
+
+# Given the datadir's path, return the InnoDB Undo Logs total size.
+SELECT py_replace_function('example_undo_size', 'INT', 'datadir', '
+    import os
+    result = 0
+    for filename in os.listdir(datadir):
+        if filename.startswith("undo"):
+            result += os.path.getsize(os.path.join(datadir, filename))
+');
+
+SELECT py_call('example_undo_size', @@global.datadir) AS undo_size;
+
+# Given the datadir's path, return the total schemas size.
+SELECT py_replace_function('example_schema_size', 'INT', 'datadir', '
+    import os
+    result = 0
+    for name in os.listdir(datadir):
+        element = os.path.join(datadir, name)
+        if os.path.isdir(element):
+            for f in os.listdir(element):
+                result += os.path.getsize(os.path.join(element, f))
+');
+
+SELECT py_call('example_schema_size', @@global.datadir) AS total_schema_size;

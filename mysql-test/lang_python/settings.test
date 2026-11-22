@@ -1,0 +1,50 @@
+--echo #
+--echo # Plugin system variables and runtime settings
+--echo #
+
+--echo # --- lang_python_vector_numpy variable ---
+--echo # Default is ON: VECTOR columns auto-convert to numpy.ndarray(float32)
+SELECT @@global.lang_python_vector_numpy;
+
+--echo # Can be toggled at runtime
+SET GLOBAL lang_python_vector_numpy = 0;
+SELECT @@global.lang_python_vector_numpy;
+SET GLOBAL lang_python_vector_numpy = 1;
+SELECT @@global.lang_python_vector_numpy;
+
+--echo # --- numpy is available in the embedded interpreter ---
+# Version-agnostic on purpose: the exact bundled numpy differs between
+# build environments (pip pulls the latest 2.x at build time).
+SELECT py_eval('int(__import__("numpy").__version__.split(".")[0]) >= 2', 'BOOL') AS numpy_2_or_newer;
+SELECT py_eval('type(__import__("numpy").array([1,2,3])).__name__', 'VARCHAR');
+
+--echo # --- numpy operations work ---
+SELECT py_eval('float(__import__("numpy").dot([1,2,3],[4,5,6]))', 'DOUBLE');
+SELECT py_exec('
+import numpy as np
+a = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+result = float(np.linalg.norm(a))
+', 'DOUBLE');
+
+--echo # --- Restore default ---
+SET GLOBAL lang_python_vector_numpy = 1;
+
+--echo # --- lang_python_strict_errors variable ---
+--echo # Default is ON: Python exceptions and conversion failures abort the query
+SELECT @@global.lang_python_strict_errors;
+SELECT @@session.lang_python_strict_errors;
+
+--echo # Settable per session and globally
+SET SESSION lang_python_strict_errors = 0;
+SELECT @@session.lang_python_strict_errors;
+SET SESSION lang_python_strict_errors = 1;
+SELECT @@session.lang_python_strict_errors;
+
+SET GLOBAL lang_python_strict_errors = 0;
+SELECT @@global.lang_python_strict_errors;
+SET GLOBAL lang_python_strict_errors = 1;
+SELECT @@global.lang_python_strict_errors;
+
+--echo # Non-boolean assignment is rejected
+--error ER_WRONG_VALUE_FOR_VAR
+SET SESSION lang_python_strict_errors = 'banana';

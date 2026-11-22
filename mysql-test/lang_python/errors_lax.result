@@ -1,0 +1,106 @@
+#
+# Error conditions in lax mode (lang_python_strict_errors=OFF)
+#
+# Confirms that opting out of strict mode preserves the legacy
+# behaviour of returning SQL NULL plus a warning, so callers can
+# observe failures via SHOW WARNINGS without aborting the query.
+#
+SET SESSION lang_python_strict_errors=OFF;
+# --- Python syntax error ---
+SELECT py_eval('def', 'INT');
+py_eval('def', 'INT')
+NULL
+Warnings:
+Warning	1105	py_eval: SyntaxError: invalid syntax (<string>, line 1)
+SHOW WARNINGS;
+Level	Code	Message
+Warning	1105	py_eval: SyntaxError: invalid syntax (<string>, line 1)
+SELECT py_exec('if True', 'INT');
+py_exec('if True', 'INT')
+NULL
+Warnings:
+Warning	1105	py_exec: SyntaxError: expected ':' (<string>, line 1)
+SHOW WARNINGS;
+Level	Code	Message
+Warning	1105	py_exec: SyntaxError: expected ':' (<string>, line 1)
+# --- Python runtime errors ---
+SELECT py_eval('1/0', 'INT');
+py_eval('1/0', 'INT')
+NULL
+Warnings:
+Warning	1105	py_eval: ZeroDivisionError: division by zero
+SHOW WARNINGS;
+Level	Code	Message
+Warning	1105	py_eval: ZeroDivisionError: division by zero
+SELECT py_eval('[][99]', 'INT');
+py_eval('[][99]', 'INT')
+NULL
+Warnings:
+Warning	1105	py_eval: IndexError: list index out of range
+SHOW WARNINGS;
+Level	Code	Message
+Warning	1105	py_eval: IndexError: list index out of range
+SELECT py_eval('int("abc")', 'INT');
+py_eval('int("abc")', 'INT')
+NULL
+Warnings:
+Warning	1105	py_eval: ValueError: invalid literal for int() with base 10: 'abc'
+SHOW WARNINGS;
+Level	Code	Message
+Warning	1105	py_eval: ValueError: invalid literal for int() with base 10: 'abc'
+SELECT py_exec('open("/nonexistent/file")', 'VARCHAR');
+py_exec('open("/nonexistent/file")', 'VARCHAR')
+NULL
+Warnings:
+Warning	1105	py_exec: FileNotFoundError: [Errno 2] No such file or directory: '/nonexistent/file'
+SHOW WARNINGS;
+Level	Code	Message
+Warning	1105	py_exec: FileNotFoundError: [Errno 2] No such file or directory: '/nonexistent/file'
+# --- Type conversion failures ---
+SELECT py_eval('"hello"', 'INT');
+py_eval('"hello"', 'INT')
+NULL
+Warnings:
+Warning	1105	py_eval: cannot convert result to INT, returning NULL
+SHOW WARNINGS;
+Level	Code	Message
+Warning	1105	py_eval: cannot convert result to INT, returning NULL
+SELECT py_eval('[1,2,3]', 'DOUBLE');
+py_eval('[1,2,3]', 'DOUBLE')
+NULL
+Warnings:
+Warning	1105	py_eval: cannot convert result to DOUBLE, returning NULL
+SHOW WARNINGS;
+Level	Code	Message
+Warning	1105	py_eval: cannot convert result to DOUBLE, returning NULL
+# --- Multiple errors in sequence (warnings don't leak) ---
+SELECT py_eval('1/0', 'INT');
+py_eval('1/0', 'INT')
+NULL
+Warnings:
+Warning	1105	py_eval: ZeroDivisionError: division by zero
+SELECT py_eval('2 + 2', 'INT');
+py_eval('2 + 2', 'INT')
+4
+SHOW WARNINGS;
+Level	Code	Message
+Warning	1105	py_eval: ZeroDivisionError: division by zero
+# --- Errors with table data: failing rows return NULL, others succeed ---
+CREATE TABLE t1 (a INT);
+INSERT INTO t1 VALUES (1), (0), (2);
+SELECT a, py_eval('10 / args[0]', 'INT', a) AS result FROM t1;
+a	result
+1	10
+0	NULL
+2	5
+Warnings:
+Note	1105	py_eval: float result truncated to INT
+Warning	1105	py_eval: ZeroDivisionError: division by zero
+Note	1105	py_eval: float result truncated to INT
+SHOW WARNINGS;
+Level	Code	Message
+Note	1105	py_eval: float result truncated to INT
+Warning	1105	py_eval: ZeroDivisionError: division by zero
+Note	1105	py_eval: float result truncated to INT
+DROP TABLE t1;
+SET SESSION lang_python_strict_errors=DEFAULT;

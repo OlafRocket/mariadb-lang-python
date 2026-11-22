@@ -1,0 +1,47 @@
+-- Ping a host to measure latency between MariaDB instances.
+-- The host could be a master, a replica, or a Galera node.
+-- The first function is trivial: we only get a number (seconds, as a DOUBLE:
+-- an INT would truncate sub-second latencies to 0).
+-- The second populates an array and returns some statistics on latency:
+-- min, max, average, and standard deviation.
+-- Requires the ping3 module: pip install ping3
+
+SELECT py_replace_function('example_ping', 'DOUBLE', 'host', '
+    from ping3 import ping
+    result = ping(host)
+    if not result:
+        raise Exception("Ping failed")
+');
+
+SELECT py_call('example_ping', 'google.com') AS ping;
+
+
+/*
+More complex function, with statistics about the ping times. Example result:
+
+MariaDB [(none)]> SELECT py_call('example_ping_stats', 'google.com', 5, 1) AS ping \G
+*************************** 1. row ***************************
+ping: {"min": 0.007540225982666016, "max": 0.01325225830078125, "avg": 0.01144413948059082, "stddev": 0.002565453327446953}
+1 row in set (5.064 sec)
+*/
+SELECT py_replace_function('example_ping_stats', 'VARCHAR', 'host,count,interval', '
+    import time
+    import json
+    import statistics
+    from ping3 import ping
+    times = []
+    for _ in range(count):
+        t = ping(host)
+        if not t:
+            raise Exception("Ping failed")
+        times.append(t)
+        time.sleep(interval)
+    result = json.dumps({
+        "min": min(times),
+        "max": max(times),
+        "avg": statistics.mean(times),
+        "stddev": statistics.stdev(times)
+    })
+');
+
+SELECT py_call('example_ping_stats', 'google.com', 5, 1) AS ping;

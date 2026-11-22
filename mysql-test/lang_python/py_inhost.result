@@ -1,0 +1,266 @@
+#
+# In-process server access (Phase 1.6): the built-in inhost module
+#
+# --- module namespace: inhost, inhost.version, inhost.sql; import forms ---
+SELECT py_exec('
+import inhost.sql
+from inhost.sql import query
+result = inhost.sql.__name__ + ";" + ("ok" if query is inhost.sql.query else "BROKEN")
+', 'VARCHAR');
+py_exec('
+import inhost.sql
+from inhost.sql import query
+result = inhost.sql.__name__ + ";" + ("ok" if query is inhost.sql.query else "BROKEN")
+', 'VARCHAR')
+inhost.sql;ok
+SELECT py_eval('len(__import__("inhost").version) > 0', 'BOOL') AS has_version;
+has_version
+1
+CREATE TABLE t1 (id INT, name VARCHAR(20), score DOUBLE, data BLOB);
+INSERT INTO t1 VALUES
+(1, 'alice', 1.5, x'00FF'),
+(2, 'bob',   2.5, NULL),
+(3, 'carol', NULL, x'AB');
+# --- reads; table names must be schema-qualified (no current db) ---
+SELECT py_eval('len(__import__("inhost").sql.query("SELECT * FROM test.t1"))', 'INT');
+py_eval('len(__import__("inhost").sql.query("SELECT * FROM test.t1"))', 'INT')
+3
+SELECT py_exec('
+import inhost
+rows = inhost.sql.query("SELECT id, name FROM test.t1 WHERE id > %s ORDER BY id", (1,))
+result = ";".join(str(r[0]) + ":" + r[1] for r in rows)
+', 'VARCHAR');
+py_exec('
+import inhost
+rows = inhost.sql.query("SELECT id, name FROM test.t1 WHERE id > %s ORDER BY id", (1,))
+result = ";".join(str(r[0]) + ":" + r[1] for r in rows)
+', 'VARCHAR')
+2:bob;3:carol
+# --- cell type mapping: int, str, float, bytes, NULL -> None ---
+SELECT py_exec('
+import inhost
+r = inhost.sql.query("SELECT id, name, score, data FROM test.t1 WHERE id = 1")[0]
+result = ",".join(type(v).__name__ for v in r)
+', 'VARCHAR');
+py_exec('
+import inhost
+r = inhost.sql.query("SELECT id, name, score, data FROM test.t1 WHERE id = 1")[0]
+result = ",".join(type(v).__name__ for v in r)
+', 'VARCHAR')
+int,str,float,bytes
+SELECT py_eval('repr(__import__("inhost").sql.query("SELECT score, data FROM test.t1 WHERE id = 2")[0])', 'VARCHAR');
+py_eval('repr(__import__("inhost").sql.query("SELECT score, data FROM test.t1 WHERE id = 2")[0])', 'VARCHAR')
+(2.5, None)
+# --- writes: execute() returns the affected-row count ---
+SELECT py_eval('__import__("inhost").sql.execute("INSERT INTO test.t1 (id, name) VALUES (%s, %s)", (4, "dave"))', 'INT');
+py_eval('__import__("inhost").sql.execute("INSERT INTO test.t1 (id, name) VALUES (%s, %s)", (4, "dave"))', 'INT')
+1
+SELECT id, name FROM t1 WHERE id = 4;
+id	name
+4	dave
+SELECT py_eval('__import__("inhost").sql.execute("UPDATE test.t1 SET score = 0 WHERE id <= %s", (2,))', 'INT');
+py_eval('__import__("inhost").sql.execute("UPDATE test.t1 SET score = 0 WHERE id <= %s", (2,))', 'INT')
+2
+SELECT id, score FROM t1 ORDER BY id;
+id	score
+1	0
+2	0
+3	NULL
+4	NULL
+# --- parameter handling: %% literal, None, bool, bytes round-trip ---
+SELECT py_eval('repr(__import__("inhost").sql.query("SELECT name FROM test.t1 WHERE name LIKE %s ORDER BY name", ("%%a%%",)))', 'VARCHAR');
+py_eval('repr(__import__("inhost").sql.query("SELECT name FROM test.t1 WHERE name LIKE %s ORDER BY name", ("%%a%%",)))', 'VARCHAR')
+[('alice',), ('carol',), ('dave',)]
+SELECT py_eval('__import__("inhost").sql.execute("UPDATE test.t1 SET score = %s WHERE id = %s", (None, 4))', 'INT');
+py_eval('__import__("inhost").sql.execute("UPDATE test.t1 SET score = %s WHERE id = %s", (None, 4))', 'INT')
+0
+SELECT id, score FROM t1 WHERE id = 4;
+id	score
+4	NULL
+SELECT py_eval('__import__("inhost").sql.execute("UPDATE test.t1 SET data = %s WHERE id = %s", (b"\\x01\\x02", 4))', 'INT');
+py_eval('__import__("inhost").sql.execute("UPDATE test.t1 SET data = %s WHERE id = %s", (b"\\x01\\x02", 4))', 'INT')
+1
+SELECT HEX(data) FROM t1 WHERE id = 4;
+HEX(data)
+0102
+SELECT py_eval('repr(__import__("inhost").sql.query("SELECT %s, %s", (True, False))[0])', 'VARCHAR');
+py_eval('repr(__import__("inhost").sql.query("SELECT %s, %s", (True, False))[0])', 'VARCHAR')
+(1, 0)
+# --- parameter errors ---
+SELECT py_eval('__import__("inhost").sql.query("SELECT %s", ())', 'INT');
+ERROR HY000: py_eval: ValueError: not enough parameters for SQL placeholders
+SELECT py_eval('__import__("inhost").sql.query("SELECT 1", (1, 2))', 'INT');
+ERROR HY000: py_eval: ValueError: too many parameters for SQL placeholders
+SELECT py_eval('__import__("inhost").sql.query("SELECT %s", ([1],))', 'INT');
+ERROR HY000: py_eval: TypeError: unsupported parameter type: list
+# --- SQL errors raise inhost.sql.Error ---
+SELECT py_eval('__import__("inhost").sql.query("SELECT * FROM test.no_such_table")', 'INT');
+ERROR HY000: py_eval: Error: Table 'test.no_such_table' doesn't exist
+SET SESSION lang_python_strict_errors = 0;
+SELECT py_eval('__import__("inhost").sql.query("SELECT * FROM test.no_such_table")', 'INT');
+py_eval('__import__("inhost").sql.query("SELECT * FROM test.no_such_table")', 'INT')
+NULL
+Warnings:
+Warning	1105	py_eval: Error: Table 'test.no_such_table' doesn't exist
+SET SESSION lang_python_strict_errors = 1;
+# --- a named function using DB access (1.5 + 1.6 together) ---
+SELECT py_create_function('row_count', 'INT', 'tbl', '
+import inhost
+result = inhost.sql.query("SELECT COUNT(*) FROM test." + tbl)[0][0]
+');
+py_create_function('row_count', 'INT', 'tbl', '
+import inhost
+result = inhost.sql.query("SELECT COUNT(*) FROM test." + tbl)[0][0]
+')
+1
+SELECT py_call('row_count', 't1');
+py_call('row_count', 't1')
+4
+# --- lang_python_db_access kill switch ---
+SELECT @@global.lang_python_db_access;
+@@global.lang_python_db_access
+1
+SET GLOBAL lang_python_db_access = 0;
+SELECT py_eval('__import__("inhost").sql.query("SELECT 1")', 'INT');
+ERROR HY000: py_eval: Error: database access is disabled (@@lang_python_db_access = OFF)
+SET GLOBAL lang_python_db_access = 1;
+SELECT py_eval('__import__("inhost").sql.query("SELECT 1")[0][0]', 'INT');
+py_eval('__import__("inhost").sql.query("SELECT 1")[0][0]', 'INT')
+1
+# --- query(): lossless cell types ---
+CREATE TABLE t2 (id INT PRIMARY KEY, f FLOAT, d DECIMAL(10,3), b BIT(4),
+u BIGINT UNSIGNED, dt DATETIME(2), da DATE, y YEAR,
+v VECTOR(2), s VARCHAR(20) CHARACTER SET latin1) ENGINE=InnoDB;
+INSERT INTO t2 VALUES
+(1, 0.1, 1.250, b'1010', 18446744073709551615, '2026-01-02 03:04:05.67',
+'2026-01-02', 2026, VEC_FromText('[1,2]'),
+CONVERT(_utf8mb4 x'7AC3BC72696368' USING latin1)),
+(2, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+SELECT py_exec('
+import inhost
+rows = inhost.sql.query("SELECT * FROM test.t2 ORDER BY id")
+result = ascii(rows[0]) + "\\n" + ascii(rows[1])
+', 'VARCHAR') AS cells;
+cells
+(1, 0.1, '1.250', b'\n', 18446744073709551615, '2026-01-02 03:04:05.67', '2026-01-02', 2026, b'\x00\x00\x80?\x00\x00\x00@', 'z\xfcrich')
+(2, None, None, None, None, None, None, None, None, None)
+# --- statement text and parameters are UTF-8 ---
+SELECT py_exec('
+import inhost
+rows = inhost.sql.query("SELECT %s AS u, CHAR_LENGTH(%s) AS chars, s FROM test.t2 WHERE id = 1", ("z\\u00fcrich \\u65e5\\u672c", "z\\u00fcrich \\u65e5\\u672c"))
+result = ascii(rows)
+', 'VARCHAR') AS utf8;
+utf8
+[('z\xfcrich \u65e5\u672c', 9, 'z\xfcrich')]
+# --- column names: Rows is a list with a columns attribute ---
+SELECT py_exec('
+import inhost
+rows = inhost.sql.query("SELECT id, f AS ratio, COUNT(*) OVER () , id FROM test.t2 ORDER BY id")
+out = [type(rows).__module__ + "." + type(rows).__name__]
+out.append("is a list: " + str(isinstance(rows, list)) + ", equals plain list: " + str(rows == [tuple(r) for r in rows]))
+out.append("columns: " + repr(rows.columns))
+out.append("len " + str(len(rows)) + ", first " + repr(rows[0]) + ", dict " + repr(dict(zip(rows.columns[:2], rows[0]))))
+empty = inhost.sql.query("SELECT id, s FROM test.t2 WHERE id < 0")
+out.append("no rows: " + repr(empty) + " " + repr(empty.columns))
+none = inhost.sql.query("UPDATE test.t2 SET y = 1999 WHERE id < 0")
+out.append("no result set: " + repr(none) + " " + repr(none.columns))
+out.append("slice is a plain list: " + type(rows[:1]).__name__)
+result = "\\n".join(out)
+', 'VARCHAR') AS names;
+names
+inhost.sql.Rows
+is a list: True, equals plain list: True
+columns: ('id', 'ratio', 'COUNT(*) OVER ()', 'id')
+len 2, first (1, 0.1, 2, 1), dict {'id': 1, 'ratio': 0.1}
+no rows: [] ('id', 's')
+no result set: [] ()
+slice is a plain list: list
+# --- several result sets: query() refuses, query_sets() returns all ---
+CREATE PROCEDURE p2() BEGIN SELECT 1 AS a; SELECT 2 AS b, 3 AS c; END//
+CREATE PROCEDURE p3(IN detail INT)
+BEGIN
+SELECT id, y FROM test.t2 ORDER BY id;
+IF detail THEN
+SELECT s FROM test.t2 WHERE id < 0;
+SELECT COUNT(*) AS n FROM test.t2;
+END IF;
+END//
+CREATE PROCEDURE p0() BEGIN UPDATE test.t2 SET f = 0.25 WHERE id = 2; END//
+SELECT py_exec('
+import inhost
+out = []
+try:
+    inhost.sql.query("CALL test.p2()")
+    out.append("NO ERROR")
+except inhost.sql.Error as e:
+    out.append(str(e))
+for q in ("CALL test.p2()", "CALL test.p3(0)", "CALL test.p3(1)", "CALL test.p0()", "SELECT 7 AS x", "UPDATE test.t2 SET y = 2001 WHERE id < 0"):
+    sets = inhost.sql.query_sets(q)
+    out.append(q + " -> " + type(sets).__name__ + " of " + str(len(sets)) + ": " + " | ".join(repr(s.columns) + " " + repr(s) for s in sets))
+out.append("query on a one-set CALL: " + repr(inhost.sql.query("CALL test.p3(0)")))
+result = "\\n".join(out)
+', 'VARCHAR') AS result_sets;
+result_sets
+query: statement returns more than one result set (use query_sets)
+CALL test.p2() -> list of 2: ('a',) [(1,)] | ('b', 'c') [(2, 3)]
+CALL test.p3(0) -> list of 1: ('id', 'y') [(1, 2026), (2, None)]
+CALL test.p3(1) -> list of 3: ('id', 'y') [(1, 2026), (2, None)] | ('s',) [] | ('n',) [(2,)]
+CALL test.p0() -> list of 0: 
+SELECT 7 AS x -> list of 1: ('x',) [(7,)]
+UPDATE test.t2 SET y = 2001 WHERE id < 0 -> list of 0: 
+query on a one-set CALL: [(1, 2026), (2, None)]
+# --- execute() runs the statement for its effect and count ---
+SELECT py_exec('
+import inhost
+out = []
+out.append(repr(inhost.sql.execute("CALL test.p2()")))
+out.append(repr(inhost.sql.execute("CALL test.p0()")))
+out.append(repr(inhost.sql.execute("SELECT * FROM test.t2")))
+out.append(repr(inhost.sql.execute("UPDATE test.t2 SET y = 2000")))
+out.append(repr(inhost.sql.execute("INSERT INTO test.t2 (id) VALUES (7),(8),(9)")))
+out.append(repr(inhost.sql.execute("DELETE FROM test.t2 WHERE id >= 7")))
+try:
+    inhost.sql.query("SELECT 1; SELECT 2")
+    out.append("NO ERROR")
+except inhost.sql.Error as e:
+    out.append("multi-statement: " + str(e)[:38])
+result = "\\n".join(out)
+', 'VARCHAR') AS results;
+results
+1
+0
+2
+2
+3
+3
+multi-statement: You have an error in your SQL syntax; 
+DROP PROCEDURE p2;
+DROP PROCEDURE p3;
+DROP PROCEDURE p0;
+# --- always a separate session, also when the caller reads no table ---
+SET @v= 5;
+BEGIN;
+INSERT INTO t2 (id) VALUES (100);
+SELECT py_exec('
+import inhost
+result = repr(inhost.sql.query("SELECT COUNT(*), @v, DATABASE(), CONNECTION_ID() = %s FROM test.t2", (args[0],)))
+', 'VARCHAR', CONNECTION_ID()) AS caller_reads_no_table;
+caller_reads_no_table
+[(2, None, None, 0)]
+SELECT py_exec('
+import inhost
+result = repr(inhost.sql.query("SELECT COUNT(*), @v, DATABASE(), CONNECTION_ID() = %s FROM test.t2", (args[0],)))
+', 'VARCHAR', CONNECTION_ID()) AS caller_reads_a_table FROM t2 WHERE id = 1;
+caller_reads_a_table
+[(2, None, None, 0)]
+ROLLBACK;
+SELECT COUNT(*) AS after_rollback FROM t2;
+after_rollback
+2
+DROP TABLE t2;
+# --- cleanup ---
+SELECT py_drop_function('row_count');
+py_drop_function('row_count')
+1
+DROP TABLE t1;
+DROP TABLE mysql.lang_python_func;
