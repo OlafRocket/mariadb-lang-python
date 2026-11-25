@@ -1,8 +1,8 @@
 # lang_python: Embedded Python for MariaDB
 
 A MariaDB plugin that runs Python inside the server.  Ships with a
-bundled Python 3.14 interpreter and numpy.  Requires MariaDB 13.3 or later
-(see [BUILD.md](BUILD.md)).
+bundled Python 3.14 interpreter and numpy.  Version 0.5 runs on an
+unmodified MariaDB 12.3 (see [BUILD.md](BUILD.md)).
 
 | SQL function | Purpose |
 |---|---|
@@ -10,8 +10,6 @@ bundled Python 3.14 interpreter and numpy.  Requires MariaDB 13.3 or later
 | `py_exec(code, type, ...)` | Execute a Python code block |
 | `py_create_function`, `py_replace_function`, `py_drop_function` | Manage named, persistent Python functions |
 | `py_call(name, ...)` | Call a named function once per row |
-| `py_agg(name, cols...)` | Aggregate: pass each group to a named function or aggregate as numpy arrays |
-| `py_create_aggregate`, `py_replace_aggregate` | Manage named Python aggregates (a class with `step` / `finalize`) |
 
 Inside Python, the built-in `inhost` module gives access to the hosting
 server: `inhost.sql.query()`, `inhost.sql.query_sets()`,
@@ -47,8 +45,6 @@ SHOW PLUGINS;
 | `lang_python_vector_numpy` | BOOL | ON | GLOBAL | When ON, VECTOR columns are passed to Python as `numpy.ndarray(float32)`.  When OFF, they are passed as raw `bytes`. |
 | `lang_python_strict_errors` | BOOL | ON | SESSION + GLOBAL | When ON, Python exceptions and result-type conversion failures abort the query with `ER_UNKNOWN_ERROR`.  When OFF, they emit a MariaDB warning and return SQL NULL.  See [Error handling](#error-handling). |
 | `lang_python_db_access` | BOOL | ON | GLOBAL | When OFF, the built-in `inhost.sql` module raises `inhost.sql.Error` instead of running SQL.  See [In-process server access](#in-process-server-access-the-inhost-module). |
-| `lang_python_agg_max_mem` | BIGINT UNSIGNED | 268435456 | SESSION, GLOBAL | Maximum bytes of argument data one `py_agg` group may buffer.  A group that exceeds it aborts the statement.  See [Aggregates](#aggregates-py_agg). |
-| `lang_python_agg_chunk_rows` | BIGINT UNSIGNED | 65536 | SESSION, GLOBAL | Rows `py_agg` collects before each `step()` call of a Python aggregate.  See [Python aggregates](#python-aggregates-py_create_aggregate). |
 
 ```sql
 -- Check current value
@@ -105,12 +101,10 @@ result = data["name"]
 | `py_eval` | On every call | A one-off expression |
 | `py_exec` | Once per statement; the following rows reuse the code | An inline block, also when evaluated per row |
 | Named function + `py_call` | Once, when created | Code that is reused across statements |
-| Named function or aggregate + `py_agg` | Once, when created | Work on many rows at once: one Python call per group or chunk |
 
 Per row, `py_eval` costs about four times as much as `py_exec` or
 `py_call`, because it parses and compiles its expression each time.
-`py_agg` avoids the per-row Python call altogether.  Measured figures:
-[bench/README.md](bench/README.md).
+Measured figures: [bench/README.md](bench/README.md).
 
 ### Named functions: py_create_function / py_replace_function / py_drop_function / py_call
 
@@ -155,115 +149,9 @@ py_call(name [, arg0, arg1, ...])
 overwrites.  Functions are stored in the `mysql.lang_python_func` system
 table (auto-created on first use) and reloaded+recompiled at server
 start, so they survive restarts.  `SELECT * FROM mysql.lang_python_func`
-is the catalog listing; its `kind` column tells functions from aggregates
-(see [Python aggregates](#python-aggregates-py_create_aggregate)).
-
-### Aggregates: py_agg
-
-`py_agg(name, col0 [, col1, ...])` is an aggregate function.  With a
-named function (this section) it calls the function once per group
-and passes each argument as a numpy array covering all rows of the
-group.  With a named aggregate it passes the group in chunks; see
-[Python aggregates](#python-aggregates-py_create_aggregate).  Rows are collected without
-running Python, so a batch computation costs one Python call instead of
-one per row.  Requires MariaDB 13.3 or later.
-
-```sql
-SELECT py_create_function('mean_abs', 'DOUBLE', 'x',
-                          'result = float(abs(x).mean())');
-
-SELECT grp, py_agg('mean_abs', val) FROM t GROUP BY grp;
-SELECT py_agg('mean_abs', val) FROM t;                       -- one group
-SELECT py_agg(DISTINCT 'mean_abs', val) FROM t;
-SELECT py_agg('mean_abs', val) FILTER (WHERE val > 0) FROM t;
-SELECT id, py_agg('mean_abs', val) OVER (ORDER BY id) FROM t;
-```
-
-- The function is an ordinary named function (see above).  With
-  `param_names` the arrays are bound to those names and the number of
-  arguments must match; without, the body sees the tuple `args` of
-  arrays.
-- The function name must be a string constant.  The result type is the
-  function's declared return type; `result` is converted as for
-  `py_call`.  A VARCHAR result is a TEXT column in `CREATE TABLE ...
-  SELECT`.
-- Argument arrays use the type mapping of
-  [`query_array`](#columnar-results-inhostsqlquery_array): integers map
-  to `int64`/`uint64`, FLOAT/DOUBLE/DECIMAL to `float64`, VECTOR to 2-D
-  `float32` (rows, dim), anything else to an `object` array of
-  `str`/`bytes`.
-- NULL: NaN in `float64` arrays, `None` in `object` arrays.  A NULL in
-  an integer or VECTOR argument is an error; exclude it with
-  `FILTER (WHERE col IS NOT NULL)` or replace it with `COALESCE`.
-- A group without rows returns NULL and does not call Python.  A
-  `result` of `None` returns NULL.
-- Row order inside a group is not defined.
-- `lang_python_agg_max_mem` limits the bytes buffered per group.
-  `GROUP BY` an expression to form bounded batches, for example
-  `GROUP BY id DIV 4096`.
-- As a window function every frame is recomputed from its rows: one
-  Python call per output row.
-- Errors follow the function's `strict_errors` setting.
-
-#### Python aggregates: py_create_aggregate
-
-A whole group must fit in `lang_python_agg_max_mem`.  For larger groups,
-or for computations that consume data in batches (online training,
-running statistics), define an **aggregate**: a class that keeps state
-and receives the group one chunk of rows at a time.
-
-```sql
-SELECT py_create_aggregate('mean', 'DOUBLE', 'x', '
-class Aggregate:
-    def __init__(self):
-        self.n = 0
-        self.total = 0.0
-    def step(self, x):            # x: numpy array, one chunk of rows
-        self.n += len(x)
-        self.total += float(x.sum())
-    def finalize(self):
-        return self.total / self.n if self.n else None
-');
-
-SELECT grp, py_agg('mean', val) FROM big_table GROUP BY grp;
-```
-
-```
-py_create_aggregate(name, return_type, param_names, body [, strict_errors])
-py_replace_aggregate(name, return_type, param_names, body [, strict_errors])
-```
-
-The arguments are those of `py_create_function`.  The body must define a
-class named `Aggregate`:
-
-| Method | Called | Purpose |
-|---|---|---|
-| `__init__(self)` | Once per group, before its first chunk | Create the state |
-| `step(self, x, y, ...)` | Once per chunk of at most `lang_python_agg_chunk_rows` rows | One numpy array per `py_agg` argument, in order |
-| `finalize(self)` | When the group's result is read | Return the result; `None` is NULL |
-
-- Rows are collected without running Python; Python runs once per chunk.
-  Memory is bounded by one chunk, so a group can be of any size.
-- **The result must not depend on where chunks are cut.**  A chunk
-  boundary has no meaning; `SET SESSION lang_python_agg_chunk_rows` only
-  tunes batch size.
-- **`finalize` must not reset or consume the state.**  With a running
-  window frame it is called, more rows are added, and it is called
-  again.
-- With `param_names` the argument count must match; without, write
-  `def step(self, *cols)`.
-- The body itself runs once per statement, so imports and model loading
-  placed outside the class happen once, not per group.
-- Array types, NULL handling, DISTINCT, FILTER, OVER and the result type
-  are as for `py_agg` with a function.  A group without rows returns
-  NULL and creates no instance.
-- An exception in the body, `__init__`, `step` or `finalize` follows
-  `strict_errors`: the statement aborts, or (lax) the group's result is
-  NULL with a warning and its remaining rows are skipped.
-- Functions and aggregates share one namespace.  `py_call` on an
-  aggregate is an error; `py_agg` accepts both kinds;
-  `py_drop_function` drops either; `py_replace_function` /
-  `py_replace_aggregate` may change the kind.
+is the catalog listing.  Its `kind` column is `function` for every entry
+this version creates; `aggregate` entries belong to plugin versions with
+aggregate support and cannot be called here.
 
 ### In-process server access (the inhost module)
 
@@ -321,8 +209,9 @@ calling statement reads a table:
 - There is **no current database**: always qualify table names
   (`test.t1`).  No session state survives between calls, and the
   caller's user variables and temporary tables are not visible.
-- `KILL QUERY` on the calling statement stops the internal statement at
-  the next row it returns.
+- `KILL QUERY` on the calling statement does not reach the internal
+  statement: the calling statement ends when the internal statement
+  has finished.
 - Reading a table the outer statement holds locked exclusively can
   block until timeout.
 - Writes from a per-row scalar function are semantically hazardous (the
@@ -354,7 +243,8 @@ dicts = [dict(zip(rows.columns, r)) for r in rows]
 A statement can return several result sets, typically `CALL` of a
 stored procedure that runs more than one `SELECT`.  `query()` raises
 `inhost.sql.Error` for such a statement, so that no result set is
-dropped unnoticed.  `query_sets()` returns all of them:
+dropped unnoticed; the statement has run to its end by then.
+`query_sets()` returns all of them:
 
 ```python
 for rows in inhost.sql.query_sets("CALL test.report(%s)", (year,)):
@@ -376,9 +266,11 @@ different length for the same statement.
 
 `query_array` returns a result set as a dict of numpy arrays, one per
 column, keyed by column name in select order.  It is the bulk path for
-numeric data (ML batches, statistics): values travel from the executor
-into the arrays in binary form with the GIL released, and no Python
-object is created per cell for numeric columns.
+numeric data (ML batches, statistics): the result is read and converted
+into column buffers with the GIL released, and no Python object is
+created per cell for numeric columns.  The values pass through the text
+form of the plugin SQL service, and the whole result is held in memory
+before the arrays are built.
 
 ```sql
 SELECT py_exec('
@@ -395,7 +287,7 @@ result = float(X.mean())
 | TINYINT, SMALLINT, MEDIUMINT, INT, BIGINT | `int64` (`uint64` if unsigned) | error, or NaN with `nulls='nan'` |
 | YEAR | `uint64` | error, or NaN with `nulls='nan'` |
 | FLOAT, DOUBLE, DECIMAL | `float64` | NaN |
-| VECTOR | 2-D `float32`, shape (rows, dim) | error |
+| VECTOR | `object` array of `bytes` (the `float32` values; `numpy.frombuffer(b, dtype=numpy.float32)`) | `None` |
 | anything else | `object` array of `str` / `bytes` | `None` |
 
 - `nulls='nan'` returns an integer column that contains NULL as
@@ -410,8 +302,7 @@ result = float(X.mean())
   returns `{}`.
 - Parameters, the separate transaction, the missing current database
   and `lang_python_db_access` work as for `query()`.
-- `KILL QUERY` on the calling statement stops the extraction at the
-  next row it produces.
+- `KILL QUERY` on the calling statement does not stop the extraction.
 
 ### Indentation
 

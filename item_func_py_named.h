@@ -24,8 +24,6 @@
   py_replace_function(name, return_type, param_names, body [, strict_errors])
   py_drop_function(name [, if_exists])
   py_call(name, arg0, arg1, ...)
-  py_create_aggregate(name, return_type, param_names, body [, strict_errors])
-  py_replace_aggregate(name, return_type, param_names, body [, strict_errors])
 
   py_create_function: validates and compiles the body immediately
     (syntax errors surface at create time), persists it in
@@ -48,11 +46,9 @@
   py_drop_function: removes the function.  Errors if absent unless
     if_exists is given and true.
 
-  py_create_aggregate / py_replace_aggregate: same arguments, but the
-    entry has kind 'aggregate': its body defines a class Aggregate with
-    step() and finalize(), which py_agg feeds one chunk of rows at a time
-    (see item_sum_py_agg.h, docs/AGGREGATE_PROTOCOL.md).  Functions and
-    aggregates share one namespace; py_drop_function drops either kind.
+  The catalog can hold entries of kind 'aggregate', written by a plugin
+    version with aggregate support.  This version does not create or
+    call them; py_drop_function drops either kind.
 
   py_call: invokes a named function.  The function name must be a
     string constant (it is resolved at prepare time, when the return
@@ -126,7 +122,7 @@ protected:
 class Item_func_py_manage : public Item_int_func
 {
 public:
-  enum Mode { FN_CREATE, FN_REPLACE, FN_DROP, AGG_CREATE, AGG_REPLACE };
+  enum Mode { FN_CREATE, FN_REPLACE, FN_DROP };
 
   Item_func_py_manage(THD *thd, List<Item> &list, Mode mode)
     : Item_int_func(thd, list), m_mode(mode) {}
@@ -149,8 +145,6 @@ public:
   static Plugin_function *create_descriptor();
   static Plugin_function *replace_descriptor();
   static Plugin_function *drop_descriptor();
-  static Plugin_function *create_aggregate_descriptor();
-  static Plugin_function *replace_aggregate_descriptor();
 
 private:
   Mode m_mode;

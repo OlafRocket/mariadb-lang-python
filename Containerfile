@@ -37,7 +37,7 @@
 #   podman build -t mariadb-langpython .          # near-instant
 #
 # Build against a different MariaDB version (branch, tag, or commit SHA):
-#   podman build --build-arg MARIADB_REF=main ...
+#   podman build --build-arg MARIADB_REF=12.3 ...
 #
 # Skip the strip step (keep build-time files for debugging):
 #   podman build --build-arg STRIP=false ...
@@ -83,9 +83,9 @@ RUN dnf -y install epel-release && \
 # submodules this build needs are initialized.  This is its own layer:
 # plugin-only edits below never re-download the server tree.
 # Default = the version the plugin is currently tested against: a
-# commit on MariaDB main (13.3).  This line is the only record of the
+# release tag of MariaDB 12.3.  This line is the only record of the
 # pin; BUILD.md and docs/ read it from here.
-ARG MARIADB_REF=392818112aa1738005b977c21387d272b4287842
+ARG MARIADB_REF=mariadb-12.3.4
 RUN git init -q /src && cd /src && \
     git remote add origin https://github.com/MariaDB/server.git && \
     git fetch -q --depth 1 origin ${MARIADB_REF} && \

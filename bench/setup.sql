@@ -1,6 +1,6 @@
 -- Benchmark fixtures.  @rows is set by run.sh before this file runs.
 --
---   bench.t        @rows rows        batch paths (py_agg, query_array, ...)
+--   bench.t        @rows rows        batch paths (query, query_array)
 --   bench.t_small  @rows / 10 rows   one Python call per row
 --   bench.t_tiny   @rows / 100 rows  one internal SQL statement per row
 
@@ -32,17 +32,6 @@ CREATE TABLE bench.results (
   seconds DOUBLE NOT NULL, row_count BIGINT NOT NULL);
 
 SELECT py_replace_function('bench_double', 'DOUBLE', 'x', 'result = x * 2.0');
-SELECT py_replace_function('bench_batch', 'DOUBLE', 'x',
-                           'result = float((x * 2.0).sum())');
-SELECT py_replace_aggregate('bench_chunked', 'DOUBLE', 'x', '
-class Aggregate:
-    def __init__(self):
-        self.total = 0.0
-    def step(self, x):
-        self.total += float((x * 2.0).sum())
-    def finalize(self):
-        return self.total
-');
 SELECT py_replace_function('bench_query', 'INT', NULL, '
 import inhost
 result = len(inhost.sql.query("SELECT id, x, k FROM bench.t"))

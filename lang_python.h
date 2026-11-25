@@ -29,8 +29,6 @@ typedef struct _object PyObject;          /* Python.h (CPython) */
 bool lang_python_use_numpy();
 bool lang_python_strict_errors(THD *thd);
 bool lang_python_db_access();
-unsigned long long lang_python_agg_max_mem(THD *thd);
-unsigned long long lang_python_agg_chunk_rows(THD *thd);
 
 /* -------------------------------------------------------------------------
    Shared Python helpers: defined in item_func_python.cc.
@@ -56,9 +54,6 @@ struct Lang_python_names
   PyObject *builtins;                     /* "__builtins__" */
   PyObject *args;                         /* "args"         */
   PyObject *result;                       /* "result"       */
-  PyObject *aggregate;                    /* "Aggregate"    */
-  PyObject *step;                         /* "step"         */
-  PyObject *finalize;                     /* "finalize"     */
 };
 extern Lang_python_names py_name;
 

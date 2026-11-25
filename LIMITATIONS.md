@@ -8,8 +8,8 @@ their own sections below.
 
 ## Server version
 
-- **Requires MariaDB `main` (13.3, alpha) at the pinned commit** (see
-  [BUILD.md](BUILD.md)).  No released (GA) server is supported.
+- **Requires MariaDB 12.3 at the pinned release** (see
+  [BUILD.md](BUILD.md)).  The server is used unmodified.
 - **Bound to the exact server build.**  Function plugins carry
   `MariaDB_FUNCTION_INTERFACE_VERSION` (`MYSQL_VERSION_ID << 8`) and use
   internal server C++ classes, so the plugin is rebuilt for every server
@@ -28,9 +28,9 @@ their own sections below.
   call takes and releases the GIL, and a contended handover costs more
   than the call itself: measured, the total throughput of a per-row
   `py_call` statement falls from 1.3 million rows per second with one
-  connection to about 0.22 million with eight.  The batch forms (`py_agg`,
-  `inhost.sql.query_array`) call Python once per group or chunk and are
-  not affected to that degree.
+  connection to about 0.22 million with eight (measured on the 13.3
+  line of the plugin).  `inhost.sql.query_array` builds its arrays in
+  one step per result and is not affected to that degree.
 
 - **Python per-thread state within a statement is unspecified.**  The
   Python thread state is kept from the first Python call of a statement
@@ -66,8 +66,8 @@ their own sections below.
 
 - **Scalar-only, single value per row.**  `py_eval`/`py_exec` are scalar
   functions: one scalar result per row.  No table-valued functions, no result
-  sets, no multi-column returns.  Aggregation is available only through
-  `py_agg` (see Aggregates below).
+  sets, no multi-column returns.  There are no Python aggregates (see
+  Aggregates below).
   True table-valued results need Phase 6 (only the JSON + `JSON_TABLE`
   convention before then).
 
@@ -135,12 +135,20 @@ their own sections below.
   (`SELECT 1; SELECT 2`) is a syntax error.  Of several result sets
   (`CALL`), `query()` and `query_array()` raise an error,
   `query_sets()` returns all, and `execute()` counts the first and
-  discards the rest.  The error is raised when the second result set
-  starts: the procedure stops there, and changes it made before that
-  point can already be committed.
+  discards the rest.  The error of `query()` and `query_array()` is
+  raised after the statement has run to its end: all changes of the
+  procedure are committed.
 
-- **`query_sets()` holds every result set in memory** until the
-  statement ends; there is no streaming across sets.
+- **Every result is converted to text and held in memory in full.**
+  `inhost.sql` uses the plugin SQL service, which returns values as text
+  and stores the whole result before the first row can be read.  Peak
+  memory is the text result plus the converted columns.  There is no
+  streaming, also not across the result sets of `query_sets()`.
+
+- **`query_array()` returns VECTOR columns as `bytes`**, not as a 2-D
+  `float32` array: the result metadata of the SQL service does not tell
+  VECTOR from VARBINARY.  `numpy.frombuffer(b, dtype=numpy.float32)`
+  converts one value.
 
 - **`columns` is lost on a slice or copy** of a `query()` result
   (`rows[:10]`, `list(rows)` are plain lists).  Rows are plain tuples;
@@ -154,41 +162,29 @@ their own sections below.
   internal query touching a table the calling statement has locked
   exclusively waits until lock timeout.
 
-- **`inhost.sql` depends on server internals beyond the plugin SQL
-  service** (a private THD and a `Protocol` subclass; see
-  `docs/BULK_DATA.md` §2).  The internal statement is invisible to
-  `KILL`; a kill of the calling statement is forwarded only when a row
-  is produced, so a long scan that returns no rows, or a long write, is
-  not interrupted.
+- **`KILL` does not reach the internal statement.**  It runs in a
+  session that `KILL` cannot address, and a kill of the calling
+  statement is not forwarded: the calling statement ends when the
+  internal statement has finished.
+
+- **`inhost.sql` reads three things the plugin SQL service has no
+  function for**: column metadata from the result structure, value
+  lengths, and the following result sets of a `CALL`.  It also makes
+  the service open a session of its own for every call.  Details are in
+  `py_inhost_rowsink.cc`.
 
 - **The built-in `inhost` module shadows any pip-installed package named
   `inhost`** in the bundled interpreter (built-in modules win over
   site-packages).  The real PyPI `mariadb` connector is unaffected and
   can be pip-installed normally.
 
-## Aggregates (Phase 2)
+## Aggregates
 
-- **`py_agg` with a function buffers a whole group in memory** before
-  calling Python, bounded by `lang_python_agg_max_mem`.  Larger groups
-  need a Python aggregate (`py_create_aggregate`), which receives the
-  group in chunks.
-- **A Python aggregate must be written to be independent of chunk
-  boundaries, and its `finalize` must be repeatable.**  The plugin cannot
-  check either; a class that violates them returns results that vary
-  with `lang_python_agg_chunk_rows` or with the window frame type.
-- **Memory held by a Python aggregate's own state is not limited**;
-  `lang_python_agg_max_mem` covers the argument buffers only.
-- **No incremental window frames** (`inverse`): see the frame item below.
-- **No parallel aggregation** (`merge`).
-- **A NULL in an integer or VECTOR argument is an error**; there is no
-  per-function option to map it.
-- **Window frames are recomputed in full** for every output row
-  (`supports_removal()` is false): quadratic cost on large frames.
-- **Row order inside a group is undefined**, also under `DISTINCT`.
-- **The Python call of a group is not interruptible by `KILL`**; the
-  row scan before it is.
-- **DECIMAL results are declared as `DECIMAL(64,38)`** in
-  `CREATE TABLE ... SELECT`, since the function declares no precision.
+- **No Python aggregates and no window functions.**  `py_agg`,
+  `py_create_aggregate` and `py_replace_aggregate` need native aggregate
+  function plugins, which MariaDB 12.3 does not have.  A named function
+  can be called inside a built-in aggregate
+  (`SUM(py_call('f', x))`), once per row.
 
 ## Safety & operations
 

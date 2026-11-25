@@ -38,10 +38,18 @@ identifies precisely which features need a server change and why.
 
 ## Server target
 
-Development tracks MariaDB `main` (13.3) at a pinned commit. The pin and
-the procedure for moving it are in [BUILD.md](BUILD.md). The 13.3
-requirement comes from native aggregate function plugins (MDEV-40672),
-which Phase 2 uses.
+Version 0.5 targets a release of MariaDB 12.3, without server changes.
+The pin and the procedure for moving it are in [BUILD.md](BUILD.md).
+
+| Phase | In version 0.5 |
+|---|---|
+| 1, 1.5 | Included |
+| 1.6 | Included, on the plugin SQL service: values pass through text, the result is buffered in full |
+| 2 | `inhost.sql.query_array` included. Aggregates (`py_agg`, Python aggregate classes) not included: they need native aggregate function plugins (MDEV-40672), which are in MariaDB 13.3 |
+| 3 and later | Not included |
+
+The phase descriptions below record the results of the research line on
+MariaDB `main` (13.3), including the parts that version 0.5 leaves out.
 
 ## Plugin-only band
 

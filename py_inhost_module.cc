@@ -33,20 +33,19 @@
 
   Future services (e.g. inhost.uid) are added as further submodules.
 
-  Execution context of inhost.sql: every statement (query, execute,
-  query_array) runs on a private internal THD through the row sink
-  (py_inhost_rowsink.cc), never on the THD executing the outer statement,
-  which would be unsafe to re-enter.  The plugin SQL service
-  (mysql_real_connect_local) is not used here: it converts every value to
-  text and buffers the whole result.  Consequences, by design (see
-  ROADMAP Phase 1.6):
+  Execution context of inhost.sql: every statement (query, query_sets,
+  execute, query_array) runs through the plugin SQL service on a separate
+  internal session (py_inhost_rowsink.cc), never on the THD executing the
+  outer statement.  The service returns values as text and buffers the
+  whole result.  Consequences (see ROADMAP Phase 1.6):
 
     - separate transaction: cannot see the outer statement's uncommitted
       changes; writes commit independently (autocommit);
-    - no session state between calls (each call is a fresh THD);
+    - no session state between calls (each call is a fresh session);
     - no current database: qualify table names (test.t1);
     - statement text and returned strings are UTF-8 (utf8mb4);
-    - a KILL of the calling statement is forwarded at each result row;
+    - a KILL of the calling statement does not reach the internal
+      statement;
     - runs grants-free, like the rest of the plugin's SQL (the plugin
       already implies arbitrary-code trust, see LIMITATIONS.md).
 
@@ -419,9 +418,9 @@ static PyObject *db_execute(PyObject *, PyObject *args)
 /* -------------------------------------------------------------------------
    inhost.sql.query_array()
 
-   The statement runs through the columnar row sink (py_inhost_rowsink.cc)
-   with the GIL released; the sink fills per-column C buffers from the
-   executor's typed values.  Here, with the GIL held again, each buffer is
+   The statement runs through the row sink (py_inhost_rowsink.cc) with the
+   GIL released; the sink parses the text values of the result into
+   per-column C buffers.  Here, with the GIL held again, each buffer is
    copied once into an exact-size numpy array.
    ------------------------------------------------------------------------- */
 
@@ -532,12 +531,12 @@ static PyMethodDef sql_methods[]=
     "query_array(sql, params=None, nulls='error') -> dict[str, ndarray]\n\n"
     "Run SQL like query() and return one numpy array per column, keyed\n"
     "by column name in select order.  Integers -> int64/uint64,\n"
-    "FLOAT/DOUBLE/DECIMAL -> float64 (NULL -> NaN), VECTOR -> 2-D\n"
-    "float32, anything else -> object array of str/bytes/None.\n"
+    "FLOAT/DOUBLE/DECIMAL -> float64 (NULL -> NaN), anything else\n"
+    "(VECTOR included) -> object array of str/bytes/None.\n"
     "A NULL in an integer column is an error unless nulls='nan', which\n"
-    "returns that column as float64 with NaN.  Values arrive in binary\n"
-    "form with the GIL released; no per-cell Python objects are built\n"
-    "for numeric columns." },
+    "returns that column as float64 with NaN.  The result is read with\n"
+    "the GIL released; no per-cell Python objects are built for numeric\n"
+    "columns." },
   { nullptr, nullptr, 0, nullptr }
 };
 

@@ -2,14 +2,12 @@
 
 ## Repo layout
 
-This repo holds only the plugin. It is developed and tested against
-MariaDB `main` (13.3, alpha) at a pinned commit. The pin is the
-`ARG MARIADB_REF=` default in the [Containerfile](Containerfile), the
-only place the commit hash is recorded.
+This repo holds only the plugin. Version 0.5 is developed and tested
+against a release of MariaDB 12.3, without server changes. The pin is
+the `ARG MARIADB_REF=` default in the [Containerfile](Containerfile),
+the only place the release tag is recorded.
 
-The 13.3 requirement comes from native aggregate function plugins
-(MDEV-40672), the registration route of Phase 2 (see
-[ROADMAP.md](ROADMAP.md)). The pin follows `main` closely; see
+The pin follows the 12.3 releases; see
 [Moving the server pin](#moving-the-server-pin).
 
 The plugin builds in one of two ways:
@@ -36,14 +34,14 @@ The plugin builds in one of two ways:
 
 ### Moving the server pin
 
-1. In the server tree, fetch and check out the new `main` tip:
-   `git fetch origin && git checkout origin/main`, then
+1. In the server tree, fetch and check out the new 12.3 release tag:
+   `git fetch origin --tags && git checkout mariadb-12.3.<n>`, then
    `git submodule update --init libmariadb wsrep-lib`.
 2. Rebuild the server and the plugin, then run the suite
    (`--suite=lang_python`).
 3. When the suite passes, set `ARG MARIADB_REF=` in the
-   [Containerfile](Containerfile) to the new commit hash and commit it
-   as `build: move MariaDB pin to <short sha>`, together with any
+   [Containerfile](Containerfile) to the new tag and commit it
+   as `build: move MariaDB pin to <tag>`, together with any
    plugin fixes the new server required. When it fails, the pin stays
    until the fixes are ready.
 
@@ -254,7 +252,7 @@ podman build -t mariadb-langpython .
 To build against a different server version (branch, tag, or commit):
 
 ```bash
-podman build --build-arg MARIADB_REF=main -t mariadb-langpython .
+podman build --build-arg MARIADB_REF=12.3 -t mariadb-langpython .
 ```
 
 By default the build strips build-time-only files (headers, static

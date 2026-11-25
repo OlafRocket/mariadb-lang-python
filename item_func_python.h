@@ -121,8 +121,8 @@ const char    *lang_python_return_type_name(py_return_type t);
 
 /*
   Apply a parsed return type to an Item with a hybrid type handler
-  (handler, length, decimals, charset).  Shared by the scalar functions
-  and py_agg.  PY_RET_BAD raises the error and returns true.
+  (handler, length, decimals, charset).  Shared by the scalar
+  functions.  PY_RET_BAD raises the error and returns true.
 */
 template <class ITEM>
 bool lang_python_apply_return_type(ITEM *item, py_return_type t,

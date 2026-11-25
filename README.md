@@ -7,8 +7,9 @@ It is a research and development project. The question it investigates:
 how far can an embedded language be taken beyond the classic stored
 procedure and stored function?
 
-Status: experimental. It requires MariaDB `main` (13.3, alpha) and is
-not intended for production use. See [LIMITATIONS.md](LIMITATIONS.md).
+Status: experimental. This is version 0.5: a plugin for an unmodified
+MariaDB 12.3 server. It is not intended for production use. See
+[LIMITATIONS.md](LIMITATIONS.md).
 
 ## Research scope
 
@@ -20,11 +21,9 @@ once per statement. This project explores the uses outside that shape.
 |---|---|---|
 | Inline code | Can Python appear inside a SQL expression, with no DDL? | `py_eval`, `py_exec` |
 | Named functions without grammar changes | How much of `CREATE FUNCTION` can a plugin provide on an unmodified server? | `py_create_function`, `py_call`: persistent, compiled once. Calling a function directly by its name needs the parser. |
-| Columnar aggregates | Can Python receive a whole group of rows as numpy arrays, with one call per group instead of one per row? | `py_agg`, a native aggregate function plugin |
-| Window functions | Can the same code run over window frames? | `py_agg(...) OVER (...)`, also with `DISTINCT` and `FILTER` |
-| Incremental aggregates | Can groups larger than memory be processed? | Python aggregate classes (`step` / `finalize`) that receive chunks of rows |
-| In-process server access | Can Python query the server it runs in, with no client connection and no text protocol? | The built-in `inhost` module; `inhost.sql.query_array()` returns one numpy array per column |
-| Numerical and ML workloads | Can VECTOR columns and bulk numeric data reach numpy without a Python object per cell? | VECTOR as `float32` arrays; binary column buffers filled with the GIL released |
+| In-process server access | Can Python query the server it runs in, with no client connection? | The built-in `inhost` module on the plugin SQL service; `inhost.sql.query_array()` returns one numpy array per column |
+| Numerical and ML workloads | Can VECTOR arguments and bulk numeric data reach numpy without a Python object per cell? | VECTOR arguments as `float32` arrays; column buffers filled with the GIL released |
+| Aggregates and window functions | Can Python receive a whole group of rows as numpy arrays? | Not in this version: needs native aggregate function plugins, which MariaDB 12.3 does not have |
 | Cost | What does a Python call cost per row? | About 10 µs per row for a scalar call against 0.13 µs for native SQL; measured with the harness in [bench/](bench/README.md) |
 | Parallelism | Can Python calls of concurrent connections run in parallel? | Planned: free-threaded CPython |
 | Language integration | `CREATE FUNCTION / PROCEDURE / TRIGGER ... LANGUAGE PYTHON` | Later: needs server grammar changes |
@@ -55,35 +54,6 @@ SELECT py_create_function('multiply', 'INT', 'x,y', 'result = x * y');
 SELECT py_call('multiply', price, quantity) FROM orders;
 ```
 
-An aggregate: the function runs once per group and receives numpy
-arrays. The same function works as a window function.
-
-```sql
-SELECT py_create_function('mean_abs', 'DOUBLE', 'x',
-                          'result = float(abs(x).mean())');
-
-SELECT grp, py_agg('mean_abs', val) FROM t GROUP BY grp;
-SELECT id, py_agg('mean_abs', val) OVER (ORDER BY id) FROM t;
-```
-
-An incremental aggregate for groups too large to buffer:
-
-```sql
-SELECT py_create_aggregate('mean', 'DOUBLE', 'x', '
-class Aggregate:
-    def __init__(self):
-        self.n = 0
-        self.total = 0.0
-    def step(self, x):            # x: numpy array, one chunk of rows
-        self.n += len(x)
-        self.total += float(x.sum())
-    def finalize(self):
-        return self.total / self.n if self.n else None
-');
-
-SELECT grp, py_agg('mean', val) FROM big_table GROUP BY grp;
-```
-
 A query from inside Python, returned as numpy arrays:
 
 ```sql
@@ -107,8 +77,6 @@ More examples, including triggers that call external services, are in
 | `py_exec(code, type, ...)` | Execute a Python code block |
 | `py_create_function`, `py_replace_function`, `py_drop_function` | Manage named, persistent Python functions |
 | `py_call(name, ...)` | Call a named function once per row |
-| `py_agg(name, cols...)` | Aggregate or window function: pass each group to a named function or aggregate as numpy arrays |
-| `py_create_aggregate`, `py_replace_aggregate` | Manage named Python aggregates (a class with `step` / `finalize`) |
 
 | Python module | Purpose |
 |---|---|
@@ -122,7 +90,7 @@ Reference: [USAGE.md](USAGE.md).
 
 | Item | Requirement |
 |---|---|
-| Server | MariaDB `main` (13.3) at the commit pinned in the [Containerfile](Containerfile). The plugin uses native aggregate function plugins (MDEV-40672) and internal server classes; it is built for one exact server version. |
+| Server | MariaDB 12.3 at the release pinned in the [Containerfile](Containerfile). No server changes. The plugin uses internal server classes; it is built for one exact server version. |
 | Python | CPython 3.14 and numpy, downloaded and built by the plugin's CMake. No system Python is used. |
 | Platform | Linux |
 
@@ -168,8 +136,7 @@ Details: [LIMITATIONS.md](LIMITATIONS.md).
 | [DEVELOPER.md](DEVELOPER.md) | Source layout, development loop, tests |
 | [bench/README.md](bench/README.md) | Benchmark harness and cases |
 | [docs/NAMED_FUNCTIONS.md](docs/NAMED_FUNCTIONS.md) | Design: named functions and the catalog |
-| [docs/BULK_DATA.md](docs/BULK_DATA.md) | Design: `query_array` and `py_agg` |
-| [docs/AGGREGATE_PROTOCOL.md](docs/AGGREGATE_PROTOCOL.md) | Design: Python aggregates |
+| [docs/BULK_DATA.md](docs/BULK_DATA.md) | Design: `query_array` |
 
 ## License
 

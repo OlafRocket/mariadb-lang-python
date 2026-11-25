@@ -95,8 +95,6 @@ echo "written: $csv"
 
 sql -e "
     SELECT py_drop_function('bench_double', 1);
-    SELECT py_drop_function('bench_batch', 1);
-    SELECT py_drop_function('bench_chunked', 1);
     SELECT py_drop_function('bench_query', 1);
     SELECT py_drop_function('bench_query_str', 1);
     SELECT py_drop_function('bench_query_array', 1);

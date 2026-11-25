@@ -18,9 +18,9 @@
 #define LANG_PYTHON_PY_COLUMNS_H
 
 /*
-  Columnar buffer -> numpy array, shared by inhost.sql.query_array() and
-  py_agg.  Both fill Rowsink_column buffers without the GIL and convert
-  them here, with the GIL held, by one copy into an exact-size array:
+  Columnar buffer -> numpy array, for inhost.sql.query_array().  The row
+  sink fills Rowsink_column buffers without the GIL; they are converted
+  here, with the GIL held, by one copy into an exact-size array:
 
     ROWSINK_INT64 / UINT64  int64 / uint64; if the column holds NULLs,
                             float64 with NaN when nulls_nan, else an

@@ -50,11 +50,7 @@ static bool create_names()
   py_name.builtins=  PyUnicode_InternFromString("__builtins__");
   py_name.args=      PyUnicode_InternFromString("args");
   py_name.result=    PyUnicode_InternFromString("result");
-  py_name.aggregate= PyUnicode_InternFromString("Aggregate");
-  py_name.step=      PyUnicode_InternFromString("step");
-  py_name.finalize=  PyUnicode_InternFromString("finalize");
-  return !py_name.builtins || !py_name.args || !py_name.result ||
-         !py_name.aggregate || !py_name.step || !py_name.finalize;
+  return !py_name.builtins || !py_name.args || !py_name.result;
 }
 
 static void release_names()
@@ -62,9 +58,6 @@ static void release_names()
   Py_CLEAR(py_name.builtins);
   Py_CLEAR(py_name.args);
   Py_CLEAR(py_name.result);
-  Py_CLEAR(py_name.aggregate);
-  Py_CLEAR(py_name.step);
-  Py_CLEAR(py_name.finalize);
 }
 
 
@@ -129,44 +122,10 @@ static MYSQL_SYSVAR_BOOL(db_access, db_access_var,
   "inhost.sql module (query/execute on an internal connection)",
   NULL, NULL, TRUE);
 
-/*
-  lang_python_agg_max_mem: upper bound, in bytes, for the argument buffers
-  one py_agg group may accumulate before its Python function is called.
-  Exceeding it aborts the statement, so an unbounded GROUP BY cannot
-  exhaust server memory.  Session+global.
-*/
-static MYSQL_THDVAR_ULONGLONG(agg_max_mem,
-  PLUGIN_VAR_RQCMDARG,
-  "Maximum bytes of argument data buffered per py_agg group; "
-  "exceeding it aborts the statement",
-  NULL, NULL, 256ULL * 1024 * 1024, 1024, ULONGLONG_MAX, 1);
-
-unsigned long long lang_python_agg_max_mem(THD *thd)
-{
-  return THDVAR(thd, agg_max_mem);
-}
-
-/*
-  lang_python_agg_chunk_rows: rows py_agg collects before it calls step()
-  of a Python aggregate (catalog kind 'aggregate').  Functions of kind
-  'function' always receive the whole group.  Session+global.
-*/
-static MYSQL_THDVAR_ULONGLONG(agg_chunk_rows,
-  PLUGIN_VAR_RQCMDARG,
-  "Rows per step() call when py_agg runs a Python aggregate",
-  NULL, NULL, 65536, 1, ULONGLONG_MAX, 1);
-
-unsigned long long lang_python_agg_chunk_rows(THD *thd)
-{
-  return THDVAR(thd, agg_chunk_rows);
-}
-
 static struct st_mysql_sys_var *sys_vars[]= {
   MYSQL_SYSVAR(vector_numpy),
   MYSQL_SYSVAR(strict_errors),
   MYSQL_SYSVAR(db_access),
-  MYSQL_SYSVAR(agg_max_mem),
-  MYSQL_SYSVAR(agg_chunk_rows),
   NULL
 };
 

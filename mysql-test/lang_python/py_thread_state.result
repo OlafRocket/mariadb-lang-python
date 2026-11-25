@@ -7,28 +7,6 @@ INSERT INTO t1 VALUES (1, 1), (2, 1), (3, 2), (4, 2), (5, 2);
 SELECT py_create_function('twice', 'INT', 'x', 'result = x * 2');
 py_create_function('twice', 'INT', 'x', 'result = x * 2')
 1
-SELECT py_create_function('total', 'INT', 'x', 'result = int(x.sum())');
-py_create_function('total', 'INT', 'x', 'result = int(x.sum())')
-1
-SELECT py_create_aggregate('running', 'INT', 'x', '
-class Aggregate:
-    def __init__(self):
-        self.total = 0
-    def step(self, x):
-        self.total += int(x.sum())
-    def finalize(self):
-        return self.total
-');
-py_create_aggregate('running', 'INT', 'x', '
-class Aggregate:
-    def __init__(self):
-        self.total = 0
-    def step(self, x):
-        self.total += int(x.sum())
-    def finalize(self):
-        return self.total
-')
-1
 # --- several rows, several Python items in one statement ---
 SELECT id, py_eval('args[0] + 1', 'INT', id) AS e,
 py_exec('result = args[0] * 10', 'INT', id) AS x,
@@ -81,30 +59,20 @@ ERROR HY000: py_eval: ZeroDivisionError: division by zero
 SELECT SUM(py_call('twice', id)) AS s FROM t1;
 s
 30
-# --- aggregates: per group, with a scalar Python item beside them ---
-SELECT grp, py_agg('total', id) AS a, py_agg('running', id) AS r,
-py_call('twice', grp) AS c
+# --- built-in aggregates over a Python item, per group ---
+SELECT grp, SUM(py_call('twice', id)) AS a, py_call('twice', grp) AS c
 FROM t1 GROUP BY grp ORDER BY grp;
-grp	a	r	c
-1	3	3	2
-2	12	12	4
-SELECT id, py_agg('total', id) OVER (PARTITION BY grp ORDER BY id) AS w
+grp	a	c
+1	6	2
+2	24	4
+SELECT id, SUM(py_call('twice', id)) OVER (PARTITION BY grp ORDER BY id) AS w
 FROM t1 ORDER BY id;
 id	w
-1	1
-2	3
-3	3
-4	7
-5	12
-# --- a failing aggregate, then a normal one ---
-SELECT py_create_function('bad_total', 'INT', 'x', 'result = 1 // 0');
-py_create_function('bad_total', 'INT', 'x', 'result = 1 // 0')
-1
-SELECT grp, py_agg('bad_total', id) FROM t1 GROUP BY grp;
-ERROR HY000: py_agg: ZeroDivisionError: division by zero
-SELECT py_agg('total', id) AS a FROM t1;
-a
-15
+1	2
+2	6
+3	6
+4	14
+5	24
 # --- stored procedure: the same statement in a loop ---
 CREATE PROCEDURE p1()
 BEGIN
@@ -154,15 +122,6 @@ DO py_call('twice', 1);
 # --- cleanup ---
 SELECT py_drop_function('twice');
 py_drop_function('twice')
-1
-SELECT py_drop_function('total');
-py_drop_function('total')
-1
-SELECT py_drop_function('running');
-py_drop_function('running')
-1
-SELECT py_drop_function('bad_total');
-py_drop_function('bad_total')
 1
 DROP TABLE t1;
 DROP TABLE mysql.lang_python_func;

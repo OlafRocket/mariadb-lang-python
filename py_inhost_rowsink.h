@@ -18,14 +18,12 @@
 #define LANG_PYTHON_PY_INHOST_ROWSINK_H
 
 /*
-  Columnar row sink: the SQL execution path of inhost.sql (query,
+  Row sink: the SQL execution path of inhost.sql (query, query_sets,
   execute, query_array).
 
-  rowsink_run() executes one SQL statement on a private internal THD and
-  receives the result through a plugin-defined Protocol subclass: the
-  executor's typed values (store_longlong, store_double, ...) are appended
-  to per-column C buffers as each row is produced.  No text conversion, no
-  MYSQL_ROW buffering, no Python objects.
+  rowsink_run() executes one SQL statement through the plugin SQL service
+  on a separate internal session and parses the text values of the result
+  into per-column C buffers.  No Python objects.
 
   This header is free of server and Python types so both sides can include
   it.  rowsink_run() touches no Python state and runs with the GIL released.
@@ -41,7 +39,8 @@ enum Rowsink_kind
   ROWSINK_INT64,                          /* signed integer types, YEAR      */
   ROWSINK_UINT64,                         /* unsigned integer types          */
   ROWSINK_FLOAT64,                        /* FLOAT, DOUBLE, DECIMAL          */
-  ROWSINK_VECTOR,                         /* VECTOR: rows x dim float32      */
+  ROWSINK_VECTOR,                         /* rows x dim float32; not filled
+                                             by rowsink_run()                */
   ROWSINK_OBJECT                          /* everything else: str / bytes    */
 };
 
@@ -72,17 +71,17 @@ struct Rowsink_options
 {
   /*
     Lossless mode, for inhost.sql.query(): DECIMAL stays text (OBJECT
-    column of str), FLOAT converts through its shortest decimal form
-    (0.1f -> 0.1, not 0.100000001490116), VECTOR is an OBJECT column of
-    bytes so it can be NULL.  Without it (query_array) DECIMAL is
-    float64 and VECTOR a 2-D float32 block.
+    column of str).  Without it (query_array) DECIMAL is float64.
+    VECTOR is an OBJECT column of bytes in both modes: the result
+    metadata of the SQL service does not distinguish it from VARBINARY.
   */
   bool exact= false;
   /*
     A statement may return several result sets (CALL of a procedure with
     more than one SELECT).
-      ROWSINK_MULTI_ERROR  fail the statement at the second result set,
-                           with the message multi_error
+      ROWSINK_MULTI_ERROR  fail with the message multi_error when a
+                           second result set exists; the statement has
+                           run to its end by then
       ROWSINK_MULTI_FIRST  keep the first, discard the rest (execute)
       ROWSINK_MULTI_ALL    keep all: the first in cols/rows, the others
                            in extra_sets (query_sets)
@@ -108,13 +107,6 @@ struct Rowsink_result
   unsigned int err_no= 0;
   std::string err_msg;
 };
-
-/*
-  Column kind for a value of the given server type; shared by the row sink
-  (result metadata) and py_agg (argument types).
-*/
-class Type_handler;
-Rowsink_kind rowsink_kind_for(const Type_handler *th, bool unsigned_flag);
 
 /* Returns false on success; on failure err_no / err_msg are set. */
 bool rowsink_run(const char *sql, size_t length,

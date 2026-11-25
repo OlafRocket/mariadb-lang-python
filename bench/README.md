@@ -91,7 +91,7 @@ the `min_s` and `max_s` columns show the spread within a run.
 
   | Table | Rows | Used by |
   |---|---|---|
-  | `bench.t` | `ROWS` | Batch paths: `py_agg`, `query`, `query_array` |
+  | `bench.t` | `ROWS` | Batch paths: `query`, `query_array` |
   | `bench.t_small` | `ROWS / 10` | One Python call per row |
   | `bench.t_tiny` | `ROWS / 100` | One internal SQL statement per row |
 
@@ -106,8 +106,6 @@ the `min_s` and `max_s` columns show the spread within a run.
 | `py_eval_per_row` | `py_eval` evaluated per row: compiles every call |
 | `py_exec_per_row`, `py_exec_per_row_block` | `py_exec` per row, one-line and multi-line body: compile cache |
 | `py_call_per_row` | Named function per row |
-| `py_agg_function`, `py_agg_function_grouped` | `py_agg` with a function, one group and 1000 groups |
-| `py_agg_aggregate` | `py_agg` with a Python aggregate (chunked) |
 | `inhost_query_numeric`, `inhost_query_strings` | `inhost.sql.query()` returning all rows |
 | `inhost_query_array` | `inhost.sql.query_array()` |
 | `inhost_point_query_per_row` | One indexed `inhost.sql.query()` per row: cost of an internal session per call |

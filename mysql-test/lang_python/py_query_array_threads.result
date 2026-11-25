@@ -1,33 +1,7 @@
 #
-# inhost.sql.query_array: KILL of the calling statement, concurrent use
+# inhost.sql.query_array: concurrent use
 #
-CREATE TABLE ready (n INT);
-# --- KILL QUERY reaches the internal statement at the next row ---
 connect  con1,localhost,root,,test;
-SELECT py_exec('import inhost\ninhost.sql.execute("INSERT INTO test.ready VALUES (1)")\nresult = len(inhost.sql.query_array("SELECT seq, SLEEP(0.001) AS z FROM test.seq_1_to_200000")["seq"])', 'INT') AS n;
-connection default;
-connection con1;
-ERROR HY000: py_exec: Error: Query execution was interrupted
-SELECT 'con1 usable after KILL' AS state;
-state
-con1 usable after KILL
-SELECT py_exec('
-import inhost
-result = int(inhost.sql.query_array("SELECT seq FROM test.seq_1_to_10")["seq"].sum())
-', 'INT') AS works_again;
-works_again
-55
-# --- a body may catch the interruption; the extraction still stops early ---
-SELECT py_exec('import inhost\ninhost.sql.execute("INSERT INTO test.ready VALUES (2)")\ntry:\n    inhost.sql.query_array("SELECT seq, SLEEP(0.001) AS z FROM test.seq_1_to_200000")\n    result = "finished"\nexcept inhost.sql.Error as e:\n    result = "caught"', 'VARCHAR') AS r;
-connection default;
-connection con1;
-r
-caught
-# --- KILL QUERY also reaches query() ---
-SELECT py_exec('import inhost\ninhost.sql.execute("INSERT INTO test.ready VALUES (3)")\nresult = len(inhost.sql.query("SELECT seq, SLEEP(0.001) AS z FROM test.seq_1_to_200000"))', 'INT') AS n;
-connection default;
-connection con1;
-ERROR HY000: py_exec: Error: Query execution was interrupted
 # --- four connections extract at the same time ---
 connect  con2,localhost,root,,test;
 connect  con3,localhost,root,,test;
@@ -53,7 +27,6 @@ connection con4;
 r4_text_path
 100000
 connection default;
-DROP TABLE ready;
 disconnect con1;
 disconnect con2;
 disconnect con3;

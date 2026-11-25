@@ -102,7 +102,8 @@ bool Item_func_py_call::fix_length_and_dec(THD *)
   if (m_entry->is_aggregate)
   {
     my_printf_error(ER_UNKNOWN_ERROR,
-                    "py_call: '%s' is an aggregate (use py_agg)", MYF(0),
+                    "py_call: '%s' is an aggregate; aggregates are not "
+                    "supported by this plugin version", MYF(0),
                     m_entry->name.c_str());
     return true;
   }
@@ -235,8 +236,6 @@ LEX_CSTRING Item_func_py_manage::func_name_cstring() const
   {
   case FN_CREATE:   n= "py_create_function";   break;
   case FN_REPLACE:  n= "py_replace_function";  break;
-  case AGG_CREATE:  n= "py_create_aggregate";  break;
-  case AGG_REPLACE: n= "py_replace_aggregate"; break;
   default:          n= "py_drop_function";     break;
   }
   LEX_CSTRING ret;
@@ -279,8 +278,7 @@ longlong Item_func_py_manage::val_int()
     return 1;
   }
 
-  /* create / replace, function or aggregate:
-     (name, return_type, param_names, body [, strict]) */
+  /* create / replace: (name, return_type, param_names, body [, strict]) */
 
   StringBuffer<32> type_buf;
   String *type_str= args[1]->val_str(&type_buf);
@@ -330,8 +328,7 @@ longlong Item_func_py_manage::val_int()
 
   if (py_catalog_create(fname, lang_python_return_type_name(rtype),
                         params_str, body->c_ptr_safe(), strict,
-                        m_mode == AGG_CREATE || m_mode == AGG_REPLACE,
-                        m_mode == FN_REPLACE || m_mode == AGG_REPLACE,
+                        false, m_mode == FN_REPLACE,
                         err, sizeof(err)))
   {
     my_printf_error(ER_UNKNOWN_ERROR, "%s: %s", MYF(0), func_name(), err);
@@ -351,20 +348,6 @@ Plugin_function *Item_func_py_manage::create_descriptor()
 Plugin_function *Item_func_py_manage::replace_descriptor()
 {
   static Create_func_tmpl<FN_REPLACE, 4, 5> creator;
-  static Plugin_function descriptor(&creator);
-  return &descriptor;
-}
-
-Plugin_function *Item_func_py_manage::create_aggregate_descriptor()
-{
-  static Create_func_tmpl<AGG_CREATE, 4, 5> creator;
-  static Plugin_function descriptor(&creator);
-  return &descriptor;
-}
-
-Plugin_function *Item_func_py_manage::replace_aggregate_descriptor()
-{
-  static Create_func_tmpl<AGG_REPLACE, 4, 5> creator;
   static Plugin_function descriptor(&creator);
   return &descriptor;
 }

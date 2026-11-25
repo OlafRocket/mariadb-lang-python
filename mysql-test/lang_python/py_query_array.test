@@ -59,14 +59,13 @@ import inhost
 cols = inhost.sql.query_array("SELECT id, bi, ub FROM test.t1 ORDER BY id", nulls="nan")
 result = "; ".join(k + "=" + str(a.dtype) + repr(a.tolist()) for k, a in cols.items())
 ', 'VARCHAR') AS nulls_nan;
+--echo # --- VECTOR arrives as bytes (float32 values), NULL as None ---
 SELECT py_exec('
 import inhost
-try:
-    inhost.sql.query_array("SELECT v FROM test.t1")
-    result = "NO ERROR"
-except inhost.sql.Error as e:
-    result = str(e)
-', 'VARCHAR') AS null_in_vector;
+import numpy
+v = inhost.sql.query_array("SELECT v FROM test.t1 ORDER BY id")["v"]
+result = str(v.dtype) + " " + repr([None if b is None else numpy.frombuffer(b, dtype=numpy.float32).tolist() for b in v])
+', 'VARCHAR') AS vector_as_bytes;
 SELECT py_exec('
 import inhost
 try:

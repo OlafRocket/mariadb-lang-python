@@ -33,20 +33,10 @@ SELECT SUM(py_exec('
 -- case: py_call_per_row @rows_small
 SELECT SUM(py_call('bench_double', x)) INTO @r FROM bench.t_small;
 
--- ---- one Python call per group or chunk ----------------------------------
+-- ---- native aggregate baseline ---------------------------------------------
 
 -- case: native_aggregate @rows
 SELECT SUM(x * 2.0) INTO @r FROM bench.t;
-
--- case: py_agg_function @rows
-SELECT py_agg('bench_batch', x) INTO @r FROM bench.t;
-
--- case: py_agg_aggregate @rows
-SELECT py_agg('bench_chunked', x) INTO @r FROM bench.t;
-
--- case: py_agg_function_grouped @rows
-SELECT SUM(a) INTO @r FROM
-  (SELECT py_agg('bench_batch', x) AS a FROM bench.t GROUP BY id MOD 1000) g;
 
 -- ---- SQL from Python ------------------------------------------------------
 

@@ -1,6 +1,14 @@
 # Bulk data paths for ML workloads: design note
 
-Status: implemented (§2 `query_array`, §3 `py_agg`).
+Scope: this note describes the design of the research line on MariaDB
+13.3. Version 0.5 differs in two points:
+
+| Section | In version 0.5 |
+|---|---|
+| §2 `query_array` | Same interface. The statement runs through the plugin SQL service: values pass through text and the result is buffered in full (see `py_inhost_rowsink.cc`). The binary row sink, the streaming, the `KILL` forwarding and the 2-D `float32` form of VECTOR columns are not part of 0.5. The measured figures do not apply |
+| §3 `py_agg` | Not included |
+
+Status on the 13.3 line: implemented (§2 `query_array`, §3 `py_agg`).
 
 - `py_agg` registers as a native aggregate function plugin (MDEV-40672,
   server 13.3+).
