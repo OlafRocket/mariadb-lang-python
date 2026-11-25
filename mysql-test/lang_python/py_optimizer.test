@@ -1,0 +1,85 @@
+--echo #
+--echo # Optimizer contract: a Python call is never a constant, is expensive,
+--echo # and is not pushed into the storage engine.
+--echo #
+
+CREATE TABLE t1 (id INT NOT NULL PRIMARY KEY, grp INT NOT NULL, KEY (grp));
+INSERT INTO t1 VALUES (1, 1), (2, 1), (3, 2), (4, 2), (5, 2);
+
+# The bodies count their calls in an attribute of the sys module, which
+# is shared by all calls of the server.
+SELECT py_create_function('calls', 'INT', NULL, '
+import sys
+sys.lp_calls = getattr(sys, "lp_calls", 0) + 1
+result = sys.lp_calls
+');
+SELECT py_create_function('reset_calls', 'INT', NULL, '
+import sys
+result = getattr(sys, "lp_calls", 0)
+sys.lp_calls = 0
+');
+
+--echo # --- constant arguments: one call per row, in the select list ---
+SELECT py_call('reset_calls') >= 0 AS reset;
+SELECT id, py_call('calls') AS n FROM t1 ORDER BY id;
+SELECT id, py_exec('
+import sys
+sys.lp_calls = getattr(sys, "lp_calls", 0) + 1
+result = sys.lp_calls
+', 'INT') AS n FROM t1 ORDER BY id;
+SELECT py_call('reset_calls') AS calls_made;
+
+--echo # --- constant arguments: one call per row, in WHERE ---
+SELECT COUNT(*) FROM t1 WHERE py_call('calls') > 0;
+SELECT py_call('reset_calls') AS calls_made;
+
+--echo # --- no call while a statement is only prepared or explained ---
+PREPARE st FROM "SELECT id FROM t1 WHERE id = py_call('calls')";
+--replace_column 9 #
+EXPLAIN SELECT id FROM t1 WHERE id = py_call('calls');
+SELECT py_call('reset_calls') AS calls_made;
+DEALLOCATE PREPARE st;
+
+--echo # --- a comparison with a Python call is not an index lookup ---
+--replace_column 9 #
+EXPLAIN SELECT id FROM t1 WHERE id = py_eval('3', 'INT');
+SELECT id FROM t1 WHERE id = py_eval('3', 'INT');
+--echo # A user variable holds the value when an index lookup is wanted
+SET @v= py_eval('3', 'INT');
+--replace_column 9 #
+EXPLAIN SELECT id FROM t1 WHERE id = @v;
+
+--echo # --- not pushed down as an index condition ---
+--echo # index_condition holds the comparison only; the Python call stays in
+--echo # attached_condition, which the server evaluates.
+--replace_regex /"(cost|rows|filtered|loops|r_[a-z_]+)": [0-9.e+-]+/"\1": #/
+EXPLAIN FORMAT=JSON SELECT * FROM t1 FORCE INDEX (grp)
+WHERE grp > 1 AND py_exec('result = args[0] % 2', 'INT', grp) = 0;
+
+--echo # --- the management functions are not constants either ---
+SELECT COUNT(*) FROM t1
+WHERE py_replace_function('calls_copy', 'INT', NULL, 'result = 1') = 1;
+SELECT py_drop_function('calls_copy');
+
+--echo # --- generated columns, DEFAULT and CHECK ---
+--echo # Allowed where the value is computed when it is read or inserted
+CREATE TABLE v1 (a INT, b INT AS (py_eval('args[0] + 1', 'INT', a)) VIRTUAL);
+CREATE TABLE v4 (a INT, b INT DEFAULT (py_eval('7', 'INT')));
+INSERT INTO v1 (a) VALUES (1), (2);
+INSERT INTO v4 (a) VALUES (1);
+SELECT * FROM v1 ORDER BY a;
+SELECT * FROM v4;
+DROP TABLE v1, v4;
+--echo # Refused where the value is stored, indexed or used as a constraint
+--error ER_GENERATED_COLUMN_FUNCTION_IS_NOT_ALLOWED
+CREATE TABLE v2 (a INT, b INT AS (py_eval('args[0] + 1', 'INT', a)) STORED);
+--error ER_GENERATED_COLUMN_FUNCTION_IS_NOT_ALLOWED
+CREATE TABLE v3 (a INT, b INT AS (py_eval('args[0] + 1', 'INT', a)) VIRTUAL, KEY (b));
+--error ER_GENERATED_COLUMN_FUNCTION_IS_NOT_ALLOWED
+CREATE TABLE v5 (a INT, CHECK (py_eval('args[0] > 0', 'BOOL', a)));
+
+--echo # --- cleanup ---
+SELECT py_drop_function('calls');
+SELECT py_drop_function('reset_calls');
+DROP TABLE t1;
+DROP TABLE mysql.lang_python_func;

@@ -141,7 +141,13 @@ bool lang_python_apply_return_type(ITEM *item, py_return_type t,
   case PY_RET_VARCHAR:
     item->set_handler(&type_handler_varchar);
     item->max_length= MAX_BLOB_WIDTH;
-    item->collation.set(system_charset_info);
+    /*
+      Coercible, like the result of a built-in string function.  The
+      hybrid function class defaults to the numeric derivation, which
+      makes every comparison with a string of another character set an
+      illegal mix of collations.
+    */
+    item->collation.set(system_charset_info, DERIVATION_COERCIBLE);
     break;
   case PY_RET_DECIMAL:
     item->set_handler(&type_handler_newdecimal);
@@ -201,6 +207,46 @@ struct Py_code_cache
 
 
 /* =========================================================================
+   Optimizer contract of every SQL function of the plugin.
+
+   A Python body can have side effects, can return a different value on
+   every call, and costs far more than a built-in function.  The server
+   assumes the opposite of a function Item unless told otherwise.  With
+   these overrides (the ones Item_func_sp and Item_func_sleep use):
+
+     const_item(), used_tables()   the call is never a constant, also with
+                                   constant arguments: it is not evaluated
+                                   while the statement is optimized and not
+                                   folded into one value for all rows
+     is_expensive()                the call is not evaluated to estimate or
+                                   simplify conditions; cheaper conditions
+                                   are tested first
+     limit_index_condition_pushdown_processor()
+                                   the call is not pushed into a storage
+                                   engine as an index condition, where it
+                                   would run inside the engine's index scan
+
+     check_vcol_func_processor()   the call is marked non-deterministic, as
+                                   RAND() is: the server then refuses it
+                                   where a value is stored or indexed
+   ========================================================================= */
+
+#define LANG_PYTHON_OPTIMIZER_CONTRACT                                      \
+  bool const_item() const override { return false; }                        \
+  table_map used_tables() const override                                    \
+  { return used_tables_cache | RAND_TABLE_BIT; }                            \
+  bool is_expensive() override { return true; }                             \
+  bool is_expensive_processor(void *) override { return true; }             \
+  bool limit_index_condition_pushdown_processor(void *) override            \
+  { return true; }                                                          \
+  bool check_vcol_func_processor(void *arg) override                        \
+  {                                                                         \
+    return mark_unsupported_function(func_name(), "()", arg,                \
+                                     VCOL_NON_DETERMINISTIC);               \
+  }
+
+
+/* =========================================================================
    Item_func_python_base
    ========================================================================= */
 
@@ -208,6 +254,8 @@ class Item_func_python_base : public Item_func_hybrid_field_type
 {
 public:
   using Item_func_hybrid_field_type::Item_func_hybrid_field_type;
+
+  LANG_PYTHON_OPTIMIZER_CONTRACT
 
   /* Subclass interface */
   virtual const char *python_func_name() const = 0;

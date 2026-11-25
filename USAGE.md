@@ -540,6 +540,26 @@ The import is fast after the first call because Python caches modules in
 `sys.modules` for the lifetime of the interpreter (i.e., until the server
 shuts down or the plugin is uninstalled).
 
+### How the optimizer treats a Python call
+
+The server treats every call of the plugin's functions as
+non-deterministic and expensive, as it treats a stored function that is
+not declared `DETERMINISTIC`:
+
+| Rule | Effect |
+|---|---|
+| Never a constant | A call with constant arguments is evaluated once per row, not once per statement.  It is not evaluated while a statement is prepared, optimized or explained. |
+| No index lookup | `WHERE id = py_eval('3', 'INT')` scans the table and compares per row.  Assign the value to a user variable first (`SET @v = py_eval('3', 'INT')`) when an index lookup is wanted. |
+| Expensive | Cheaper conditions of the same `WHERE` clause are tested first where the optimizer can order them. |
+| Not pushed into the storage engine | A condition with a Python call is evaluated by the server, never inside an engine index scan. |
+| Generated columns | Allowed in `DEFAULT` and in `VIRTUAL` generated columns without an index.  Refused in `STORED` generated columns, indexed virtual columns and `CHECK` constraints. |
+
+The same rules apply to `py_create_function`, `py_replace_function` and
+`py_drop_function`.
+
+A VARCHAR result has the collation of the system character set with
+coercible derivation, like the result of a built-in string function.
+
 ### Thread safety
 
 The Python interpreter is initialized once when the plugin loads and shared

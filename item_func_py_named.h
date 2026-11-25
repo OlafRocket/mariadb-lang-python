@@ -130,6 +130,9 @@ public:
   longlong val_int() override;
   LEX_CSTRING func_name_cstring() const override;
 
+  /* The call changes the catalog: never a constant, never folded */
+  LANG_PYTHON_OPTIMIZER_CONTRACT
+
   const Type_handler *type_handler() const override
   { return &type_handler_slonglong; }
 
