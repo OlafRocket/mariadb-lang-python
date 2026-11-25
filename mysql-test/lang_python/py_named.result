@@ -165,6 +165,9 @@ SELECT py_call('is_null', NULL), py_call('is_null', 0);
 py_call('is_null', NULL)	py_call('is_null', 0)
 1	0
 # --- functions survive a server restart (catalog reload) ---
+# The catalog table is given the form it had before the
+# is_deterministic column existed: the reload adds the column.
+ALTER TABLE mysql.lang_python_func DROP COLUMN is_deterministic;
 # restart
 SELECT py_call('multiply', 3, 4);
 py_call('multiply', 3, 4)
@@ -172,6 +175,38 @@ py_call('multiply', 3, 4)
 SELECT py_call('fib', 10);
 py_call('fib', 10)
 55
+SELECT name, is_deterministic FROM mysql.lang_python_func
+WHERE name IN ('multiply', 'fib') ORDER BY name;
+name	is_deterministic
+fib	0
+multiply	0
+# --- deterministic: sixth argument, NULL keeps a default ---
+SELECT py_replace_function('multiply', 'INT', 'x,y', 'result = x * y', NULL, 1);
+py_replace_function('multiply', 'INT', 'x,y', 'result = x * y', NULL, 1)
+1
+SELECT py_replace_function('fib', 'INT', 'n', '
+a, b = 0, 1
+for _ in range(n):
+    a, b = b, a + b
+result = a
+', 1, NULL);
+py_replace_function('fib', 'INT', 'n', '
+a, b = 0, 1
+for _ in range(n):
+    a, b = b, a + b
+result = a
+', 1, NULL)
+1
+SELECT name, strict_errors, is_deterministic FROM mysql.lang_python_func
+WHERE name IN ('multiply', 'fib') ORDER BY name;
+name	strict_errors	is_deterministic
+fib	1	0
+multiply	1	1
+SELECT py_call('multiply', 3, 4), py_call('fib', 10);
+py_call('multiply', 3, 4)	py_call('fib', 10)
+12	55
+SELECT py_create_function('too_many', 'INT', NULL, 'result = 1', 1, 1, 1);
+ERROR 42000: Incorrect parameter count in the call to native function 'py_create_function'
 # --- cleanup ---
 SELECT py_drop_function('multiply');
 py_drop_function('multiply')

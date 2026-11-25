@@ -54,8 +54,12 @@ struct PyFuncEntry
   bool        strict_errors= true;
   bool        is_aggregate= false;  /* kind 'aggregate': body defines class
                                        Aggregate (step/finalize), used by
-                                       py_agg in chunks; see
-                                       docs/AGGREGATE_PROTOCOL.md */
+                                       plugin versions with aggregate
+                                       support */
+  bool        deterministic= false;  /* declared by the creator: the same
+                                        arguments give the same result
+                                        and the body has no side effects.
+                                        Not checked. */
   PyObject   *code= nullptr;   /* compiled body (module code); strong ref */
 
   PyFuncEntry() = default;
@@ -88,8 +92,8 @@ PyFuncEntryPtr py_catalog_lookup(const char *name);
 */
 bool py_catalog_create(const char *name, const char *return_type,
                        const char *param_names, const char *body,
-                       bool strict_errors, bool aggregate, bool replace,
-                       char *errbuf, size_t errlen);
+                       bool strict_errors, bool aggregate, bool deterministic,
+                       bool replace, char *errbuf, size_t errlen);
 
 /* DELETE from the catalog and evict from the cache. */
 bool py_catalog_drop(const char *name, bool if_exists,

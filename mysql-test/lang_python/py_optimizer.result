@@ -138,6 +138,100 @@ CREATE TABLE v3 (a INT, b INT AS (py_eval('args[0] + 1', 'INT', a)) VIRTUAL, KEY
 ERROR HY000: Function or expression 'py_eval()' cannot be used in the GENERATED ALWAYS AS clause of `b`
 CREATE TABLE v5 (a INT, CHECK (py_eval('args[0] > 0', 'BOOL', a)));
 ERROR HY000: Function or expression 'py_eval()' cannot be used in the CHECK clause of `CONSTRAINT_1`
+# --- a function declared deterministic ---
+SELECT py_create_function('det', 'INT', 'x', '
+import sys
+sys.lp_calls = getattr(sys, "lp_calls", 0) + 1
+result = x
+', NULL, 1);
+py_create_function('det', 'INT', 'x', '
+import sys
+sys.lp_calls = getattr(sys, "lp_calls", 0) + 1
+result = x
+', NULL, 1)
+1
+SELECT name, strict_errors, is_deterministic FROM mysql.lang_python_func
+ORDER BY name;
+name	strict_errors	is_deterministic
+calls	1	0
+det	1	1
+reset_calls	1	0
+# Constant arguments: a constant, usable for an index lookup
+SELECT py_call('reset_calls') >= 0 AS reset;
+reset
+1
+EXPLAIN SELECT id FROM t1 WHERE id = py_call('det', 3);
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	t1	const	PRIMARY	PRIMARY	4	const	#	Using where; Using index
+SELECT py_call('reset_calls') AS calls_made_by_explain;
+calls_made_by_explain
+0
+SELECT id FROM t1 WHERE id = py_call('det', 3);
+id
+3
+SELECT py_call('reset_calls') AS calls_made;
+calls_made
+2
+SELECT id, py_call('det', 7) AS c FROM t1 ORDER BY id;
+id	c
+1	7
+2	7
+3	7
+4	7
+5	7
+SELECT py_call('reset_calls') AS calls_made;
+calls_made
+5
+# Column arguments: one call per row
+SELECT COUNT(*) FROM t1 WHERE py_call('det', id) > 0;
+COUNT(*)
+5
+SELECT py_call('reset_calls') AS calls_made;
+calls_made
+5
+# Still not pushed down and not allowed where a value is stored
+EXPLAIN FORMAT=JSON SELECT * FROM t1 FORCE INDEX (grp)
+WHERE grp > 1 AND py_call('det', grp) = 2;
+EXPLAIN
+{
+  "query_block": {
+    "select_id": 1,
+    "cost": #,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "t1",
+          "access_type": "range",
+          "possible_keys": ["grp"],
+          "key": "grp",
+          "key_length": "4",
+          "used_key_parts": ["grp"],
+          "loops": #,
+          "rows": #,
+          "cost": #,
+          "filtered": #,
+          "index_condition": "t1.grp > 1",
+          "attached_condition": "py_call('det',t1.grp) = 2"
+        }
+      }
+    ]
+  }
+}
+CREATE TABLE v2 (a INT, b INT AS (py_call('det', a)) STORED);
+ERROR HY000: Function or expression 'py_call()' cannot be used in the GENERATED ALWAYS AS clause of `b`
+# Replaced without the declaration: per row again, no index lookup
+SELECT py_replace_function('det', 'INT', 'x', 'result = x');
+py_replace_function('det', 'INT', 'x', 'result = x')
+1
+SELECT name, is_deterministic FROM mysql.lang_python_func WHERE name = 'det';
+name	is_deterministic
+det	0
+EXPLAIN SELECT id FROM t1 WHERE id = py_call('det', 3);
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	t1	index	NULL	PRIMARY	4	NULL	#	Using where; Using index
+SELECT py_drop_function('det');
+py_drop_function('det')
+1
 # --- cleanup ---
 SELECT py_drop_function('calls');
 py_drop_function('calls')

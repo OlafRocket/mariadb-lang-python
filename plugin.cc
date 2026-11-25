@@ -85,7 +85,7 @@ maria_declare_plugin(lang_python)
   Item_func_py_manage::create_descriptor(),
   "py_create_function",
   "Olaf Razzoli",
-  "py_create_function(name, type, params, body [, strict]) - "
+  "py_create_function(name, type, params, body [, strict [, det]]) - "
   "create named Python function",
   PLUGIN_LICENSE_GPL,
   NULL, NULL, 0x0005, NULL, NULL, "0.5",
@@ -96,7 +96,7 @@ maria_declare_plugin(lang_python)
   Item_func_py_manage::replace_descriptor(),
   "py_replace_function",
   "Olaf Razzoli",
-  "py_replace_function(name, type, params, body [, strict]) - "
+  "py_replace_function(name, type, params, body [, strict [, det]]) - "
   "create or replace named Python function",
   PLUGIN_LICENSE_GPL,
   NULL, NULL, 0x0005, NULL, NULL, "0.5",

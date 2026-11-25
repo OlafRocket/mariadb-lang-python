@@ -20,8 +20,10 @@
 /*
   Named Python functions (Phase 1.5): SQL surface.
 
-  py_create_function(name, return_type, param_names, body [, strict_errors])
-  py_replace_function(name, return_type, param_names, body [, strict_errors])
+  py_create_function(name, return_type, param_names, body
+                     [, strict_errors [, deterministic]])
+  py_replace_function(name, return_type, param_names, body
+                      [, strict_errors [, deterministic]])
   py_drop_function(name [, if_exists])
   py_call(name, arg0, arg1, ...)
 
@@ -40,6 +42,14 @@
     it decides whether a runtime Python exception in THIS function aborts
     the query or yields NULL + warning, regardless of the session
     lang_python_strict_errors setting.
+
+    deterministic (default 0) declares that the function returns the
+    same result for the same arguments and has no side effects.  It is a
+    promise of the creator and is not checked.  py_call of a
+    deterministic function with constant arguments is a constant for the
+    optimizer: it can be evaluated once for the statement and used for
+    an index lookup.  NULL for strict_errors or deterministic keeps the
+    default.
 
   py_replace_function: same, but create-or-overwrite.
 
@@ -90,6 +100,21 @@ public:
 
   bool fix_length_and_dec(THD *) override;
 
+  /*
+    A function declared deterministic follows the rules of a built-in
+    function for constness: constant when its arguments are.  It stays
+    expensive, so it is not evaluated while the statement is optimized,
+    and it is not pushed into the storage engine.  As for
+    Item_func_sp with a DETERMINISTIC routine.
+  */
+  bool const_item() const override
+  { return deterministic() && Item_func::const_item(); }
+  table_map used_tables() const override
+  {
+    return deterministic() ? Item_func::used_tables()
+                           : Item_func_python_base::used_tables();
+  }
+
   Item *shallow_copy(THD *thd) const override
   { return get_item_copy<Self>(thd, this); }
 
@@ -110,6 +135,9 @@ public:
 
 protected:
   PyObject *execute(bool &out_owns) override;
+
+private:
+  bool deterministic() const { return m_entry && m_entry->deterministic; }
 };
 
 

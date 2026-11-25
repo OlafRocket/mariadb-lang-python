@@ -326,9 +326,17 @@ longlong Item_func_py_manage::val_int()
       strict= v != 0;
   }
 
+  bool deterministic= false;
+  if (arg_count > 5)
+  {
+    longlong v= args[5]->val_int();
+    if (!args[5]->null_value)
+      deterministic= v != 0;
+  }
+
   if (py_catalog_create(fname, lang_python_return_type_name(rtype),
                         params_str, body->c_ptr_safe(), strict,
-                        false, m_mode == FN_REPLACE,
+                        false, deterministic, m_mode == FN_REPLACE,
                         err, sizeof(err)))
   {
     my_printf_error(ER_UNKNOWN_ERROR, "%s: %s", MYF(0), func_name(), err);
@@ -340,14 +348,14 @@ longlong Item_func_py_manage::val_int()
 
 Plugin_function *Item_func_py_manage::create_descriptor()
 {
-  static Create_func_tmpl<FN_CREATE, 4, 5> creator;
+  static Create_func_tmpl<FN_CREATE, 4, 6> creator;
   static Plugin_function descriptor(&creator);
   return &descriptor;
 }
 
 Plugin_function *Item_func_py_manage::replace_descriptor()
 {
-  static Create_func_tmpl<FN_REPLACE, 4, 5> creator;
+  static Create_func_tmpl<FN_REPLACE, 4, 6> creator;
   static Plugin_function descriptor(&creator);
   return &descriptor;
 }
