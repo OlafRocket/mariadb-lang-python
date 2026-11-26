@@ -57,6 +57,13 @@ Configure with `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON` to get
 `compile_commands.json` for IDE code navigation (VSCode:
 `"C_Cpp.default.compileCommands": "<build-dir>/compile_commands.json"`).
 
+Optional: a compiler cache shortens repeated full builds of the server
+tree. With `ccache` installed, add
+`-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache`
+when configuring. One server build tree fills several gigabytes of
+cache; raise the limit accordingly (`ccache -M 20G`). The build does not
+depend on it.
+
 Rebuild only the plugin, with an explicit job count:
 
 ```bash
