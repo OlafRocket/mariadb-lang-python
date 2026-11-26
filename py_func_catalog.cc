@@ -90,15 +90,23 @@ static const char CATALOG_DDL[]=
   "  definer       VARCHAR(384)  NULL,"
   "  strict_errors TINYINT(1)    NOT NULL DEFAULT 1,"
   "  kind          ENUM('function','aggregate') NOT NULL DEFAULT 'function',"
+  "  is_deterministic TINYINT(1) NOT NULL DEFAULT 0,"
   "  created       TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,"
   "  modified      TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP"
   "                  ON UPDATE CURRENT_TIMESTAMP"
   ") ENGINE=Aria TRANSACTIONAL=1 "
   "COMMENT='lang_python named functions (py_create_function)'";
 
+/* A table created before the column existed gets it on the first load.
+   The name follows mysql.proc; DETERMINISTIC is a reserved word. */
+static const char CATALOG_UPGRADE[]=
+  "ALTER TABLE mysql.lang_python_func"
+  " ADD COLUMN IF NOT EXISTS is_deterministic TINYINT(1) NOT NULL DEFAULT 0"
+  " AFTER kind";
+
 static const char CATALOG_LOAD[]=
-  "SELECT name, body, return_type, param_names, strict_errors, kind"
-  " FROM mysql.lang_python_func";
+  "SELECT name, body, return_type, param_names, strict_errors, kind,"
+  " is_deterministic FROM mysql.lang_python_func";
 
 static MYSQL *local_connect(char *errbuf, size_t errlen)
 {
@@ -239,7 +247,7 @@ static PyFuncEntryPtr make_entry(const char *name, const char *return_type,
                                  const char *param_names,
                                  std::vector<std::string> &&params,
                                  bool strict, bool aggregate,
-                                 PyObject *code)
+                                 bool deterministic, PyObject *code)
 {
   auto e= std::make_shared<PyFuncEntry>();
   e->name= name;
@@ -249,6 +257,7 @@ static PyFuncEntryPtr make_entry(const char *name, const char *return_type,
   e->has_params= !e->params.empty();
   e->strict_errors= strict;
   e->is_aggregate= aggregate;
+  e->deterministic= deterministic;
   e->code= code;
 
   /* The names as interned strings, for the per-call namespace setup */
@@ -297,6 +306,13 @@ static bool ensure_loaded_locked(char *errbuf, size_t errlen)
     mysql_close(m);
     return true;
   }
+  if (mysql_real_query(m, CATALOG_UPGRADE, sizeof(CATALOG_UPGRADE) - 1))
+  {
+    snprintf(errbuf, errlen, "cannot upgrade mysql.lang_python_func: %s",
+             mysql_error(m));
+    mysql_close(m);
+    return true;
+  }
 
   if (mysql_real_query(m, CATALOG_LOAD, sizeof(CATALOG_LOAD) - 1))
   {
@@ -322,6 +338,7 @@ static bool ensure_loaded_locked(char *errbuf, size_t errlen)
     const char *params= row[3];                      /* NULL = args[] mode */
     bool strict= !row[4] || atoi(row[4]) != 0;
     bool aggregate= row[5] && !strcmp(row[5], "aggregate");
+    bool deterministic= row[6] && atoi(row[6]) != 0;
 
     /* A broken row must not prevent the server (or the rest of the
        catalog) from coming up. */
@@ -341,7 +358,7 @@ static bool ensure_loaded_locked(char *errbuf, size_t errlen)
       continue;
     }
     PyFuncEntryPtr entry= make_entry(nm, rtype, params, std::move(plist),
-                                     strict, aggregate, code);
+                                     strict, aggregate, deterministic, code);
     if (!entry)
     {
       sql_print_warning("lang_python: skipping named function '%s': "
@@ -393,8 +410,8 @@ PyFuncEntryPtr py_catalog_lookup(const char *name)
 
 bool py_catalog_create(const char *name, const char *return_type,
                        const char *param_names, const char *body,
-                       bool strict_errors, bool aggregate, bool replace,
-                       char *errbuf, size_t errlen)
+                       bool strict_errors, bool aggregate, bool deterministic,
+                       bool replace, char *errbuf, size_t errlen)
 {
   std::lock_guard<std::mutex> g(mutate_lock);
   if (ensure_loaded_locked(errbuf, errlen))
@@ -420,7 +437,7 @@ bool py_catalog_create(const char *name, const char *return_type,
     return true;
   PyFuncEntryPtr entry= make_entry(name, return_type, param_names,
                                    std::move(plist), strict_errors,
-                                   aggregate, code);
+                                   aggregate, deterministic, code);
   if (!entry)
   {
     snprintf(errbuf, errlen, "out of memory");
@@ -433,8 +450,8 @@ bool py_catalog_create(const char *name, const char *return_type,
 
   std::string q(replace ? "REPLACE" : "INSERT");
   q+= " INTO mysql.lang_python_func"
-      " (name, body, return_type, param_names, strict_errors, kind)"
-      " VALUES (";
+      " (name, body, return_type, param_names, strict_errors, kind,"
+      " is_deterministic) VALUES (";
   append_quoted(q, m, name);
   q+= ", ";
   append_quoted(q, m, body);
@@ -447,7 +464,8 @@ bool py_catalog_create(const char *name, const char *return_type,
     q+= "NULL";
   q+= ", ";
   q+= strict_errors ? "1, " : "0, ";
-  q+= aggregate ? "'aggregate')" : "'function')";
+  q+= aggregate ? "'aggregate', " : "'function', ";
+  q+= deterministic ? "1)" : "0)";
 
   if (run_catalog_write(m, q, errbuf, errlen))
   {

@@ -113,9 +113,28 @@ SELECT py_create_function('is_null', 'BOOL', 'v', 'result = v is None');
 SELECT py_call('is_null', NULL), py_call('is_null', 0);
 
 --echo # --- functions survive a server restart (catalog reload) ---
+--echo # The catalog table is given the form it had before the
+--echo # is_deterministic column existed: the reload adds the column.
+ALTER TABLE mysql.lang_python_func DROP COLUMN is_deterministic;
 --source include/restart_mysqld.inc
 SELECT py_call('multiply', 3, 4);
 SELECT py_call('fib', 10);
+SELECT name, is_deterministic FROM mysql.lang_python_func
+WHERE name IN ('multiply', 'fib') ORDER BY name;
+
+--echo # --- deterministic: sixth argument, NULL keeps a default ---
+SELECT py_replace_function('multiply', 'INT', 'x,y', 'result = x * y', NULL, 1);
+SELECT py_replace_function('fib', 'INT', 'n', '
+a, b = 0, 1
+for _ in range(n):
+    a, b = b, a + b
+result = a
+', 1, NULL);
+SELECT name, strict_errors, is_deterministic FROM mysql.lang_python_func
+WHERE name IN ('multiply', 'fib') ORDER BY name;
+SELECT py_call('multiply', 3, 4), py_call('fib', 10);
+--error ER_WRONG_PARAMCOUNT_TO_NATIVE_FCT
+SELECT py_create_function('too_many', 'INT', NULL, 'result = 1', 1, 1, 1);
 
 --echo # --- cleanup ---
 SELECT py_drop_function('multiply');

@@ -87,6 +87,7 @@ several connections.
 | `py_query_array`, `py_query_array_threads` | `query_array`: types, NULLs, parameters, errors; KILL (also of `query`) and concurrent connections |
 | `py_agg`, `py_agg_threads` | `py_agg` with functions: types, DISTINCT, FILTER, windows, limits; KILL and concurrent connections |
 | `py_aggregate` | Python aggregates: chunking, kinds, errors, restart |
+| `py_optimizer` | Optimizer contract: calls per row with constant arguments, no call in `PREPARE` and `EXPLAIN`, no index lookup, no index condition pushdown, generated columns |
 | `py_thread_state` | Statement shapes that create and release the Python thread state: several Python items, subqueries, prepared statements, failing statements, stored procedure loops, nested statements through `inhost.sql` |
 
 Conventions:

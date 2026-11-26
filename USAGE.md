@@ -127,8 +127,8 @@ SELECT py_drop_function('multiply');
 Signatures:
 
 ```
-py_create_function(name, return_type, param_names, body [, strict_errors])
-py_replace_function(name, return_type, param_names, body [, strict_errors])
+py_create_function(name, return_type, param_names, body [, strict_errors [, deterministic]])
+py_replace_function(name, return_type, param_names, body [, strict_errors [, deterministic]])
 py_drop_function(name [, if_exists])
 py_call(name [, arg0, arg1, ...])
 ```
@@ -150,6 +150,13 @@ py_call(name [, arg0, arg1, ...])
   itself.
 - `strict_errors`: frozen into the function at create time (default 1);
   it overrides the session `lang_python_strict_errors` for this function.
+- `deterministic` (default 0): declares that the function returns the
+  same result for the same arguments and has no side effects.  The
+  declaration is not checked.  See
+  [How the optimizer treats a Python call](#how-the-optimizer-treats-a-python-call).
+  NULL for `strict_errors` or `deterministic` keeps the default, so
+  `py_create_function('f', 'INT', 'x', 'result = x', NULL, 1)` sets
+  only `deterministic`.
 
 `py_create_function` errors if the name exists; `py_replace_function`
 overwrites.  Functions are stored in the `mysql.lang_python_func` system
@@ -648,6 +655,39 @@ result = math.factorial(args[0])
 The import is fast after the first call because Python caches modules in
 `sys.modules` for the lifetime of the interpreter (i.e., until the server
 shuts down or the plugin is uninstalled).
+
+### How the optimizer treats a Python call
+
+The server treats every call of the plugin's functions as
+non-deterministic and expensive, as it treats a stored function that is
+not declared `DETERMINISTIC`:
+
+| Rule | Effect |
+|---|---|
+| Never a constant | A call with constant arguments is evaluated once per row, not once per statement.  It is not evaluated while a statement is prepared, optimized or explained. |
+| No index lookup | `WHERE id = py_eval('3', 'INT')` scans the table and compares per row.  Assign the value to a user variable first (`SET @v = py_eval('3', 'INT')`) when an index lookup is wanted. |
+| Expensive | Cheaper conditions of the same `WHERE` clause are tested first where the optimizer can order them. |
+| Not pushed into the storage engine | A condition with a Python call is evaluated by the server, never inside an engine index scan. |
+| Generated columns | Allowed in `DEFAULT` and in `VIRTUAL` generated columns without an index.  Refused in `STORED` generated columns, indexed virtual columns and `CHECK` constraints. |
+
+The same rules apply to the management functions (`py_create_function`,
+`py_replace_function`, `py_drop_function`, `py_create_aggregate`,
+`py_replace_aggregate`).
+
+A named function created with `deterministic = 1` differs in the first
+two rules when all its arguments are constants:
+
+| Rule | Deterministic function, constant arguments |
+|---|---|
+| Constant | `py_call` is a constant of the statement.  The server may still call it more than once (once per use of the value); it does not call it during `PREPARE` or `EXPLAIN`. |
+| Index lookup | `WHERE id = py_call('f', 3)` uses the index. |
+
+The other rules are unchanged.  With column arguments the function is
+called once per row.  A function that is declared deterministic but is
+not gives wrong query results, as a SQL stored function does.
+
+A VARCHAR result has the collation of the system character set with
+coercible derivation, like the result of a built-in string function.
 
 ### Thread safety
 

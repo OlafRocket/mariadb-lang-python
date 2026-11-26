@@ -20,8 +20,10 @@
 /*
   Named Python functions (Phase 1.5): SQL surface.
 
-  py_create_function(name, return_type, param_names, body [, strict_errors])
-  py_replace_function(name, return_type, param_names, body [, strict_errors])
+  py_create_function(name, return_type, param_names, body
+                     [, strict_errors [, deterministic]])
+  py_replace_function(name, return_type, param_names, body
+                      [, strict_errors [, deterministic]])
   py_drop_function(name [, if_exists])
   py_call(name, arg0, arg1, ...)
   py_create_aggregate(name, return_type, param_names, body [, strict_errors])
@@ -43,12 +45,21 @@
     the query or yields NULL + warning, regardless of the session
     lang_python_strict_errors setting.
 
+    deterministic (default 0) declares that the function returns the
+    same result for the same arguments and has no side effects.  It is a
+    promise of the creator and is not checked.  py_call of a
+    deterministic function with constant arguments is a constant for the
+    optimizer: it can be evaluated once for the statement and used for
+    an index lookup.  NULL for strict_errors or deterministic keeps the
+    default.
+
   py_replace_function: same, but create-or-overwrite.
 
   py_drop_function: removes the function.  Errors if absent unless
     if_exists is given and true.
 
-  py_create_aggregate / py_replace_aggregate: same arguments, but the
+  py_create_aggregate / py_replace_aggregate: the arguments up to
+    strict_errors (an aggregate has no deterministic declaration), but the
     entry has kind 'aggregate': its body defines a class Aggregate with
     step() and finalize(), which py_agg feeds one chunk of rows at a time
     (see item_sum_py_agg.h, docs/AGGREGATE_PROTOCOL.md).  Functions and
@@ -94,6 +105,21 @@ public:
 
   bool fix_length_and_dec(THD *) override;
 
+  /*
+    A function declared deterministic follows the rules of a built-in
+    function for constness: constant when its arguments are.  It stays
+    expensive, so it is not evaluated while the statement is optimized,
+    and it is not pushed into the storage engine.  As for
+    Item_func_sp with a DETERMINISTIC routine.
+  */
+  bool const_item() const override
+  { return deterministic() && Item_func::const_item(); }
+  table_map used_tables() const override
+  {
+    return deterministic() ? Item_func::used_tables()
+                           : Item_func_python_base::used_tables();
+  }
+
   Item *shallow_copy(THD *thd) const override
   { return get_item_copy<Self>(thd, this); }
 
@@ -114,6 +140,9 @@ public:
 
 protected:
   PyObject *execute(bool &out_owns) override;
+
+private:
+  bool deterministic() const { return m_entry && m_entry->deterministic; }
 };
 
 
@@ -133,6 +162,9 @@ public:
 
   longlong val_int() override;
   LEX_CSTRING func_name_cstring() const override;
+
+  /* The call changes the catalog: never a constant, never folded */
+  LANG_PYTHON_OPTIMIZER_CONTRACT
 
   const Type_handler *type_handler() const override
   { return &type_handler_slonglong; }

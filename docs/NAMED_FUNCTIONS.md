@@ -69,9 +69,9 @@ that writes to the same catalog this phase introduces.
 
 ```sql
 -- create (errors if 'name' already exists)
-py_create_function(name, return_type, param_names, body [, strict_errors])
+py_create_function(name, return_type, param_names, body [, strict_errors [, deterministic]])
 -- replace (create-or-overwrite)
-py_replace_function(name, return_type, param_names, body [, strict_errors])
+py_replace_function(name, return_type, param_names, body [, strict_errors [, deterministic]])
 -- drop (errors if absent; py_drop_function(name, /*if_exists=*/1) tolerant)
 py_drop_function(name)
 -- call
@@ -84,6 +84,7 @@ py_call(name, arg0, arg1, ...)
 | `param_names` | Comma-separated (`'x,y'`) to bind the arguments as named locals, or `NULL` to expose them as `args[0], args[1], ...` |
 | `body` | Python source; dedented with `dedent_source()` at create time, as on the inline path.  The body is a SQL string literal and subject to SQL string escaping until Phase 5 adopts a delimited body |
 | `strict_errors` | Stored in the catalog row at create time |
+| `deterministic` | Stored in the catalog row at create time (column `is_deterministic`; `DETERMINISTIC` is a reserved word). Declares the function deterministic to the optimizer; not checked |
 
 All four functions are registered the same way as `py_eval`/`py_exec`:
 as `MariaDB_FUNCTION_PLUGIN` entries (plugin name == SQL function name)
@@ -104,6 +105,7 @@ CREATE TABLE IF NOT EXISTS mysql.lang_python_func (
   strict_errors TINYINT(1)    NOT NULL DEFAULT 1,
   kind          ENUM('function','aggregate') NOT NULL DEFAULT 'function',
                                            -- see AGGREGATE_PROTOCOL.md
+  is_deterministic TINYINT(1) NOT NULL DEFAULT 0,
   created       TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   modified      TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP
                   ON UPDATE CURRENT_TIMESTAMP
