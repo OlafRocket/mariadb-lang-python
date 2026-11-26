@@ -222,8 +222,21 @@ bool Item_sum_py_agg::add_row()
   if (st->computed)                       /* running frame: result is stale */
     st->drop_result();
   st->seen_rows= true;
-  if (st->failed)                         /* lax error earlier in the group */
+  if (st->failed)                         /* error earlier in the group */
     return false;
+
+  /*
+    A row that cannot be added.  A window frame scan ignores the result of
+    add() and reads on to the end of the frame before it checks for an
+    error, so the group stops buffering here: the remaining rows are
+    skipped, and no partly added row is left behind.
+  */
+  auto fail_group= [st]()
+  {
+    st->failed= true;
+    st->reset_buffers();
+    return true;
+  };
 
   for (uint i= 0; i < n_data(); i++)
   {
@@ -262,7 +275,7 @@ bool Item_sum_py_agg::add_row()
         my_printf_error(ER_UNKNOWN_ERROR,
                         "py_agg: NULL in VECTOR argument '%s'", MYF(0),
                         c.name.c_str());
-        return true;
+        return fail_group();
       }
       size_t dim= s->length() / sizeof(float);
       if (s->length() % sizeof(float) || dim == 0 ||
@@ -271,7 +284,7 @@ bool Item_sum_py_agg::add_row()
         my_printf_error(ER_UNKNOWN_ERROR,
                         "py_agg: VECTOR argument '%s' has values of "
                         "different dimensions", MYF(0), c.name.c_str());
-        return true;
+        return fail_group();
       }
       c.dim= dim;
       size_t old= c.floats.size();
@@ -297,7 +310,7 @@ bool Item_sum_py_agg::add_row()
             uint errors;
             if (conv.copy(s->ptr(), s->length(), s->charset(),
                           &my_charset_utf8mb4_bin, &errors))
-              return true;
+              return fail_group();
             s= &conv;
           }
         }
@@ -318,7 +331,7 @@ bool Item_sum_py_agg::add_row()
     my_printf_error(ER_UNKNOWN_ERROR,
                     "py_agg: group exceeds lang_python_agg_max_mem "
                     "(%llu bytes)", MYF(0), st->max_bytes);
-    return true;
+    return fail_group();
   }
   if (m_entry->is_aggregate && st->rows >= st->chunk_rows)
     return step_chunk(st);
@@ -421,7 +434,12 @@ bool Item_sum_py_agg::step_chunk(State *st)
 
   if (!st->cls)
   {
-    /* First chunk of the statement: run the body, find the class */
+    /*
+      First chunk of the statement: run the body, find the class.  After a
+      lax error in the body the next group arrives here again; release the
+      namespace of the failed run.
+    */
+    Py_XDECREF(st->ns);
     st->ns= PyDict_New();
     ok= st->ns != nullptr;
     if (ok)

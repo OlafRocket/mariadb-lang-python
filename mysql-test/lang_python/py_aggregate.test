@@ -256,6 +256,16 @@ SET SESSION lang_python_agg_chunk_rows = 1;
 SELECT grp, py_agg('a_boom_lax', id) AS n FROM t1 GROUP BY grp ORDER BY grp;
 SET SESSION lang_python_agg_chunk_rows = DEFAULT;
 
+--echo # --- lax error in the body: every group is NULL, the namespace of a failed run is released ---
+SELECT py_create_aggregate('a_body_lax', 'INT', 'x', '
+import sys, weakref
+probe = set()
+sys.modules["__main__"].__dict__.setdefault("py_agg_probes", []).append(weakref.ref(probe))
+raise RuntimeError("body")
+', 0) AS created;
+SELECT grp, py_agg('a_body_lax', id) AS n FROM t1 GROUP BY grp ORDER BY grp;
+SELECT py_eval('(lambda p: "%d runs, %d alive" % (len(p), sum(r() is not None for r in p)))(__import__("sys").modules["__main__"].__dict__.pop("py_agg_probes"))', 'VARCHAR') AS namespaces;
+
 --echo # --- drop: py_drop_function drops either kind ---
 SELECT py_drop_function('a_sum');
 --error ER_UNKNOWN_ERROR
@@ -271,6 +281,7 @@ SELECT py_drop_function('a_nostep');
 SELECT py_drop_function('a_boom_body');
 SELECT py_drop_function('a_boom');
 SELECT py_drop_function('a_boom_lax');
+SELECT py_drop_function('a_body_lax');
 SELECT COUNT(*) FROM mysql.lang_python_func;
 DROP TABLE t1;
 

@@ -137,6 +137,9 @@ SELECT py_agg('r_int', seq) AS fits FROM seq_1_to_500;
 SELECT py_agg('r_int', seq) FROM seq_1_to_5000;
 SELECT seq MOD 100 AS g, py_agg('r_int', seq) AS small_groups_fit
 FROM seq_1_to_5000 GROUP BY seq MOD 100 ORDER BY g LIMIT 2;
+--echo # a window frame is bounded as well
+--error ER_UNKNOWN_ERROR
+SELECT py_agg('r_int', seq) OVER () FROM seq_1_to_5000;
 SET SESSION lang_python_agg_max_mem = DEFAULT;
 
 --echo # --- the function is called once per group ---

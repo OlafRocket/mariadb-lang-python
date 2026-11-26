@@ -230,8 +230,8 @@ Implementation: `item_sum_py_agg.cc`.
   with a warning, according to the `strict_errors` setting of the
   function.
 - **Memory guard:** `lang_python_agg_max_mem` (session, default 256 MB)
-  bounds the bytes one group may buffer; exceeding it aborts the
-  statement.  Groups beyond the limit are handled by Python aggregates,
+  bounds the bytes one group or one window frame may buffer; exceeding
+  it aborts the statement.  Groups beyond the limit are handled by Python aggregates,
   which receive the same buffers in chunks
   ([AGGREGATE_PROTOCOL](AGGREGATE_PROTOCOL.md)).
 - **Window frames:** `supports_removal()` is false.  The server

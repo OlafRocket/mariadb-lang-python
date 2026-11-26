@@ -72,6 +72,9 @@ In every row option (a) was chosen.
 | First `val_*()` after rows | Flush the pending partial chunk through `step`, call `finalize`, cache the result until the next row or `clear()` |
 
 - A group without rows returns NULL; `Aggregate` is not instantiated.
+- After a lax error in the body no class is available: the body is
+  executed again for the next group, and the namespace of the failed run
+  is released.
 - `finalize` can be called more than once on the same instance (running
   window frames read a result, then add rows). It must not consume or
   reset state. This is a documented contract, not something the plugin can

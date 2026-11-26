@@ -128,7 +128,12 @@ class Item_sum_py_agg : public Item_sum_plugin,
     /* Chunked mode (catalog kind 'aggregate') */
     unsigned long long chunk_rows= 0;
     bool seen_rows= false;                /* the group has at least one row */
-    bool failed= false;                   /* lax error: group result is NULL */
+    /*
+      An error in this group: its remaining rows are skipped.  After a lax
+      Python error the group's result is NULL; after any other error the
+      statement fails.
+    */
+    bool failed= false;
     PyObject *ns= nullptr;                /* namespace the body ran in */
     PyObject *cls= nullptr;               /* Aggregate; per statement item */
     PyObject *inst= nullptr;              /* Aggregate(); per group */

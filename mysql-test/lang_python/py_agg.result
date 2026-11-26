@@ -241,6 +241,9 @@ FROM seq_1_to_5000 GROUP BY seq MOD 100 ORDER BY g LIMIT 2;
 g	small_groups_fit
 0	127500
 1	122550
+# a window frame is bounded as well
+SELECT py_agg('r_int', seq) OVER () FROM seq_1_to_5000;
+ERROR HY000: py_agg: group exceeds lang_python_agg_max_mem (4096 bytes)
 SET SESSION lang_python_agg_max_mem = DEFAULT;
 # --- the function is called once per group ---
 SELECT py_create_function('counted', 'INT', 'x', '

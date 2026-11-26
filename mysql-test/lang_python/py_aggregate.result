@@ -432,6 +432,25 @@ grp	n
 Warnings:
 Warning	1105	py_agg: RuntimeError: row 4
 SET SESSION lang_python_agg_chunk_rows = DEFAULT;
+# --- lax error in the body: every group is NULL, the namespace of a failed run is released ---
+SELECT py_create_aggregate('a_body_lax', 'INT', 'x', '
+import sys, weakref
+probe = set()
+sys.modules["__main__"].__dict__.setdefault("py_agg_probes", []).append(weakref.ref(probe))
+raise RuntimeError("body")
+', 0) AS created;
+created
+1
+SELECT grp, py_agg('a_body_lax', id) AS n FROM t1 GROUP BY grp ORDER BY grp;
+grp	n
+1	NULL
+2	NULL
+Warnings:
+Warning	1105	py_agg: RuntimeError: body
+Warning	1105	py_agg: RuntimeError: body
+SELECT py_eval('(lambda p: "%d runs, %d alive" % (len(p), sum(r() is not None for r in p)))(__import__("sys").modules["__main__"].__dict__.pop("py_agg_probes"))', 'VARCHAR') AS namespaces;
+namespaces
+2 runs, 0 alive
 # --- drop: py_drop_function drops either kind ---
 SELECT py_drop_function('a_sum');
 py_drop_function('a_sum')
@@ -470,6 +489,9 @@ py_drop_function('a_boom')
 1
 SELECT py_drop_function('a_boom_lax');
 py_drop_function('a_boom_lax')
+1
+SELECT py_drop_function('a_body_lax');
+py_drop_function('a_body_lax')
 1
 SELECT COUNT(*) FROM mysql.lang_python_func;
 COUNT(*)

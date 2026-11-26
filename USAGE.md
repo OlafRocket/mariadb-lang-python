@@ -205,7 +205,8 @@ SELECT id, py_agg('mean_abs', val) OVER (ORDER BY id) FROM t;
 - A group without rows returns NULL and does not call Python.  A
   `result` of `None` returns NULL.
 - Row order inside a group is not defined.
-- `lang_python_agg_max_mem` limits the bytes buffered per group.
+- `lang_python_agg_max_mem` limits the bytes buffered per group, and
+  per frame when `py_agg` is a window function.
   `GROUP BY` an expression to form bounded batches, for example
   `GROUP BY id DIV 4096`.
 - As a window function every frame is recomputed from its rows: one
@@ -266,7 +267,8 @@ class named `Aggregate`:
   NULL and creates no instance.
 - An exception in the body, `__init__`, `step` or `finalize` follows
   `strict_errors`: the statement aborts, or (lax) the group's result is
-  NULL with a warning and its remaining rows are skipped.
+  NULL with a warning and its remaining rows are skipped.  After a lax
+  error in the body, the body runs again for the next group.
 - Functions and aggregates share one namespace.  `py_call` on an
   aggregate is an error; `py_agg` accepts both kinds;
   `py_drop_function` drops either; `py_replace_function` /

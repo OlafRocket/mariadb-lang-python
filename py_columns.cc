@@ -78,9 +78,9 @@ PyObject *py_column_to_array(Rowsink_column &c, size_t rows, bool nulls_nan,
   {
     npy_intp dims[2]= { n, (npy_intp) c.dim };
     PyObject *arr= PyArray_SimpleNew(2, dims, NPY_FLOAT32);
-    if (arr && !c.floats.empty())
+    if (arr && rows && c.dim)
       memcpy(PyArray_DATA((PyArrayObject *) arr), c.floats.data(),
-             c.floats.size() * sizeof(float));
+             rows * c.dim * sizeof(float));
     return arr;
   }
   case ROWSINK_OBJECT:
