@@ -1,0 +1,194 @@
+--echo #
+--echo # py_agg in SQL constructs: ROLLUP, subqueries, UNION, views, stored
+--echo # procedures, CREATE TABLE ... SELECT and INSERT ... SELECT; errors
+--echo # inside window frames.  Each query runs a function (whole group) and
+--echo # an aggregate (chunks) next to the built-in SUM.
+--echo #
+
+CREATE TABLE t1 (grp INT, sub INT, id INT, w VECTOR(2) NOT NULL, v VECTOR(2));
+INSERT INTO t1 VALUES
+  (1, 1, 1, VEC_FromText('[1,1]'), VEC_FromText('[1,2]')),
+  (1, 1, 2, VEC_FromText('[2,2]'), VEC_FromText('[3,4]')),
+  (1, 2, 3, VEC_FromText('[3,3]'), VEC_FromText('[5,6]')),
+  (2, 1, 4, VEC_FromText('[4,4]'), VEC_FromText('[7,8]')),
+  (2, 2, 5, VEC_FromText('[5,5]'), NULL),
+  (2, 2, 6, VEC_FromText('[6,6]'), VEC_FromText('[9,10]'));
+
+SELECT py_create_function('f_sum', 'INT', 'x', 'result = int(x.sum())');
+SELECT py_create_aggregate('a_sum', 'INT', 'x', '
+class Aggregate:
+    def __init__(self):
+        self.total = 0
+    def step(self, x):
+        self.total += int(x.sum())
+    def finalize(self):
+        return self.total
+') AS created;
+
+--echo # --- WITH ROLLUP: every level has its own state ---
+SELECT grp, sub, py_agg('f_sum', id) AS f, py_agg('a_sum', id) AS a,
+       SUM(id) AS expected
+FROM t1 GROUP BY grp, sub WITH ROLLUP;
+SET SESSION lang_python_agg_chunk_rows = 1;
+SELECT grp, py_agg('a_sum', id) AS a, SUM(id) AS expected
+FROM t1 GROUP BY grp WITH ROLLUP;
+SET SESSION lang_python_agg_chunk_rows = DEFAULT;
+SELECT grp, py_agg(DISTINCT 'f_sum', sub) AS f, py_agg(DISTINCT 'a_sum', sub) AS a,
+       SUM(DISTINCT sub) AS expected
+FROM t1 GROUP BY grp WITH ROLLUP;
+
+--echo # --- subqueries: correlated scalar, derived table, IN ---
+SELECT g.grp,
+       (SELECT py_agg('f_sum', id) FROM t1 WHERE t1.grp = g.grp) AS f,
+       (SELECT py_agg('a_sum', id) FROM t1 WHERE t1.grp = g.grp) AS a,
+       (SELECT py_agg('a_sum', id) FROM t1 WHERE t1.grp = g.grp + 10) AS no_rows
+FROM (SELECT DISTINCT grp FROM t1) g ORDER BY g.grp;
+SELECT * FROM (SELECT grp, py_agg('f_sum', id) AS f, py_agg('a_sum', id) AS a
+               FROM t1 GROUP BY grp) d
+WHERE f > 6 AND a > 6;
+SELECT id FROM t1
+WHERE id IN (SELECT py_agg('f_sum', sub) FROM t1 GROUP BY grp)
+   OR id IN (SELECT py_agg('a_sum', id) FROM t1 WHERE grp = 1)
+ORDER BY id;
+
+--echo # --- UNION ---
+SELECT 'function' AS kind, py_agg('f_sum', id) AS s FROM t1
+UNION ALL
+SELECT 'aggregate', py_agg('a_sum', id) FROM t1
+UNION ALL
+SELECT 'built-in', SUM(id) FROM t1;
+
+--echo # --- views: the stored text is parsed again ---
+CREATE VIEW v1 AS
+  SELECT grp, py_agg('f_sum', id) AS f, py_agg('a_sum', id) AS a
+  FROM t1 GROUP BY grp;
+SELECT * FROM v1 ORDER BY grp;
+SELECT SUM(f), SUM(a) FROM v1;
+CREATE VIEW v2 AS
+  SELECT py_agg(DISTINCT 'f_sum', sub) AS uniq,
+         py_agg('a_sum', id) FILTER (WHERE id > 2) AS filtered
+  FROM t1;
+SELECT * FROM v2;
+CREATE VIEW v3 AS
+  SELECT id, py_agg('a_sum', id) OVER (PARTITION BY grp ORDER BY id) AS running
+  FROM t1;
+SELECT * FROM v3 ORDER BY id;
+DROP VIEW v1, v2, v3;
+
+--echo # --- stored procedure: executed several times ---
+CREATE PROCEDURE p1(g INT)
+  SELECT py_agg('f_sum', id) AS f, py_agg('a_sum', id) AS a FROM t1 WHERE grp = g;
+CALL p1(1);
+CALL p1(2);
+CALL p1(3);
+CALL p1(1);
+DROP PROCEDURE p1;
+
+--echo # --- CREATE TABLE ... SELECT and INSERT ... SELECT ---
+CREATE TABLE t2 AS
+  SELECT grp, py_agg('a_sum', id) AS a FROM t1 GROUP BY grp;
+SHOW CREATE TABLE t2;
+INSERT INTO t2 SELECT 0, py_agg('f_sum', id) FROM t1;
+INSERT INTO t2 SELECT grp + 10, py_agg('a_sum', id) FROM t1 GROUP BY grp;
+SELECT * FROM t2 ORDER BY grp;
+DROP TABLE t2;
+
+--echo # --- errors inside a window frame: a row that cannot be added ---
+SELECT py_create_function('vec_rows', 'INT', 'm', 'result = len(m)');
+SELECT py_create_function('vec2_rows', 'VARCHAR', 'a,b', 'result = str(a.shape) + str(b.shape)');
+--echo # NULL in a VECTOR argument
+--error ER_UNKNOWN_ERROR
+SELECT id, py_agg('vec_rows', v) OVER (ORDER BY id) FROM t1;
+--echo # the argument before it has taken the row already
+--error ER_UNKNOWN_ERROR
+SELECT id, py_agg('vec2_rows', w, v) OVER (ORDER BY id) FROM t1;
+--error ER_UNKNOWN_ERROR
+SELECT id, py_agg('vec2_rows', w, v) OVER () FROM t1;
+--error ER_UNKNOWN_ERROR
+SELECT py_agg('vec2_rows', w, v) FROM t1;
+SELECT id, py_agg('vec2_rows', w, v) OVER (PARTITION BY grp ORDER BY id) AS shapes
+FROM t1 WHERE v IS NOT NULL ORDER BY id;
+--echo # NULL in an integer argument
+--error ER_UNKNOWN_ERROR
+SELECT id, py_agg('f_sum', IF(id = 5, NULL, id)) OVER (ORDER BY id) FROM t1;
+--error ER_UNKNOWN_ERROR
+SELECT id, py_agg('a_sum', IF(id = 5, NULL, id)) OVER (ORDER BY id) FROM t1;
+
+--echo # --- errors inside a window frame: Python exception, strict ---
+SELECT py_create_function('f_five', 'INT', 'x', '
+if (x == 5).any():
+    raise ValueError("five")
+result = int(x.sum())
+') AS created;
+SELECT py_create_aggregate('a_five', 'INT', 'x', '
+class Aggregate:
+    def __init__(self):
+        self.total = 0
+    def step(self, x):
+        if (x == 5).any():
+            raise ValueError("five")
+        self.total += int(x.sum())
+    def finalize(self):
+        return self.total
+') AS created;
+--error ER_UNKNOWN_ERROR
+SELECT id, py_agg('f_five', id) OVER (ORDER BY id) FROM t1;
+--error ER_UNKNOWN_ERROR
+SELECT id, py_agg('a_five', id) OVER (ORDER BY id) FROM t1;
+SET SESSION lang_python_agg_chunk_rows = 1;
+--error ER_UNKNOWN_ERROR
+SELECT id, py_agg('a_five', id) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM t1;
+SET SESSION lang_python_agg_chunk_rows = DEFAULT;
+SELECT id, py_agg('f_five', id) OVER (PARTITION BY grp ORDER BY id) AS f,
+           py_agg('a_five', id) OVER (PARTITION BY grp ORDER BY id) AS a
+FROM t1 WHERE grp = 1 ORDER BY id;
+
+--echo # --- errors inside a window frame: Python exception, lax ---
+SELECT py_replace_function('f_five', 'INT', 'x', '
+if (x == 5).any():
+    raise ValueError("five")
+result = int(x.sum())
+', 0) AS replaced;
+SELECT py_replace_aggregate('a_five', 'INT', 'x', '
+class Aggregate:
+    def __init__(self):
+        self.total = 0
+    def step(self, x):
+        if (x == 5).any():
+            raise ValueError("five")
+        self.total += int(x.sum())
+    def finalize(self):
+        return self.total
+', 0) AS replaced;
+--echo # sliding frame: only the frames that contain the row are NULL
+SELECT id, py_agg('f_five', id) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS f
+FROM t1 ORDER BY id;
+SELECT id, py_agg('a_five', id) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS a
+FROM t1 ORDER BY id;
+SET SESSION lang_python_agg_chunk_rows = 1;
+SELECT id, py_agg('a_five', id) OVER (ORDER BY id ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) AS a
+FROM t1 ORDER BY id;
+SET SESSION lang_python_agg_chunk_rows = DEFAULT;
+--echo # running frame and partitions: the error ends with the partition
+SELECT id, py_agg('f_five', id) OVER (PARTITION BY grp ORDER BY id) AS f
+FROM t1 ORDER BY id;
+SELECT id, py_agg('a_five', id) OVER (PARTITION BY grp ORDER BY id) AS a
+FROM t1 ORDER BY id;
+--echo # GROUP BY WITH ROLLUP: the group and the levels above it are NULL
+SELECT grp, py_agg('f_five', id) AS f, py_agg('a_five', id) AS a
+FROM t1 GROUP BY grp WITH ROLLUP;
+
+--echo # --- the session works after the errors ---
+SELECT py_agg('f_sum', id) AS f, py_agg('a_sum', id) AS a FROM t1;
+
+SELECT py_drop_function('f_sum');
+SELECT py_drop_function('a_sum');
+SELECT py_drop_function('vec_rows');
+SELECT py_drop_function('vec2_rows');
+SELECT py_drop_function('f_five');
+SELECT py_drop_function('a_five');
+DROP TABLE t1;
+
+# The catalog table is auto-created on first use; drop it again so MTR's
+# check-testcase sees identical before/after states of the mysql schema.
+DROP TABLE mysql.lang_python_func;
