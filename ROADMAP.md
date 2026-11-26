@@ -50,6 +50,20 @@ The pin and the procedure for moving it are in [BUILD.md](BUILD.md).
 
 The phase descriptions below record the results of the research line on
 MariaDB `main` (13.3), including the parts that version 0.5 leaves out.
+Figures measured for version 0.5 on MariaDB 12.3 (one machine, release
+build with debug info, harness in [bench/](bench/README.md)):
+
+| Path | Version 0.5 | 13.3 line |
+|---|---|---|
+| Native SQL expression | 0.12 µs per row | 0.13 µs per row |
+| `py_exec`, `py_call` | 0.52 to 0.56 µs per row | 0.50 to 0.55 µs per row |
+| `py_eval` | 23 µs per row | 22 µs per row |
+| `inhost.sql.query`, 1M rows, numeric | 0.79 s | 0.34 s |
+| `inhost.sql.query`, 1M rows, strings | 0.40 s | 0.34 s |
+| `inhost.sql.query_array`, 1M rows | 0.57 s | 0.12 s |
+| `inhost.sql` indexed point query | 92 µs per call | 57 µs per call |
+| `py_call` per row, 1 connection | 1.4 million rows per second | not measured in this run |
+| `py_call` per row, 8 connections | 0.25 million rows per second in total | not measured in this run |
 
 ## Plugin-only band
 

@@ -36,6 +36,7 @@
 
 #include "lang_python.h"
 #include "py_func_catalog.h"
+#include "py_local_session.h"
 
 
 /* -------------------------------------------------------------------------
@@ -73,11 +74,12 @@ PyFuncEntry::~PyFuncEntry()
 
 
 /* -------------------------------------------------------------------------
-   SQL helpers: everything goes through the plugin SQL service's local
-   connection (mysql_real_connect_local), which transparently uses a
-   separate internal THD whenever the calling thread has none or is mid
-   statement.  One short-lived connection per catalog operation; catalog
-   operations are rare (py_call itself never runs SQL).
+   SQL helpers: everything goes through a local connection of the plugin
+   SQL service on a session of its own (py_local_session.h), so a
+   catalog change never joins the session or the transaction of the
+   statement that calls py_create_function.  One short-lived connection
+   per catalog operation; catalog operations are rare (py_call itself
+   never runs SQL).
    ------------------------------------------------------------------------- */
 
 static const char CATALOG_DDL[]=
@@ -116,7 +118,7 @@ static MYSQL *local_connect(char *errbuf, size_t errlen)
     snprintf(errbuf, errlen, "out of memory (mysql_init)");
     return nullptr;
   }
-  if (!mysql_real_connect_local(m))
+  if (py_connect_own_session(m))
   {
     snprintf(errbuf, errlen, "internal connection failed: %s", mysql_error(m));
     mysql_close(m);

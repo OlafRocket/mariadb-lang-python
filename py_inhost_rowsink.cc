@@ -25,11 +25,8 @@
   the first row can be read.  Each value is parsed here into the column
   buffer chosen from the result metadata.
 
-  Execution context: a separate internal THD per call.  The service runs
-  on the THD of the caller when that THD holds no table locks; to keep
-  one behaviour for all callers (own session, own transaction), the local
-  connection is opened while no THD is current, which makes the service
-  create its own.  The session character sets are set to utf8mb4 and
+  Execution context: a separate internal THD per call
+  (py_local_session.h).  The session character sets are set to utf8mb4 and
   NO_BACKSLASH_ESCAPES is removed from sql_mode, as the parameter
   escaping of inhost.sql expects.
 
@@ -46,7 +43,7 @@
 
 #define MYSQL_SERVER
 #include <my_global.h>
-#include <sql_class.h>                    /* current_thd, set_current_thd */
+#include <sql_class.h>
 
 #include <mysql.h>
 #include <sql_common.h>                   /* st_mysql_methods */
@@ -58,6 +55,7 @@
 #include <limits>
 
 #include "py_inhost_rowsink.h"
+#include "py_local_session.h"
 
 
 static const char SESSION_SETUP[]=
@@ -294,20 +292,8 @@ bool rowsink_run(const char *sql, size_t length,
     return true;
   }
 
-  /*
-    With no current THD the service creates a THD of its own.
-    THD::store_globals() of that THD takes over the mysys thread id of
-    this thread; both are restored here.
-  */
-  THD *caller= current_thd;
-  my_thread_id caller_mysys_id= my_thread_var->id;
-  set_current_thd(nullptr);
-  bool connected= mysql_real_connect_local(m) != nullptr;
-  set_current_thd(caller);
-  my_thread_var->id= caller_mysys_id;
-
   bool failed= true;
-  if (!connected ||
+  if (py_connect_own_session(m) ||
       mysql_real_query(m, SESSION_SETUP, sizeof(SESSION_SETUP) - 1) ||
       mysql_real_query(m, sql, (unsigned long) length))
     set_error(out, m);

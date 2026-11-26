@@ -15,6 +15,7 @@ layout, the development loop and the tests.
 | `py_func_catalog.cc`, `.h` | Catalog table `mysql.lang_python_func` and its in-memory cache of compiled bodies |
 | `py_inhost_module.cc`, `.h` | Built-in Python module `inhost` (`inhost.sql.query`, `query_sets`, `execute`, `query_array`): parameters and Python result objects (`inhost.sql.Rows`) |
 | `py_inhost_rowsink.cc`, `.h` | Row sink that executes every `inhost.sql` statement through the plugin SQL service and parses the text result into column buffers |
+| `py_local_session.cc`, `.h` | Opens a local connection of the SQL service on a session of its own; used by `inhost.sql` and the catalog |
 | `py_columns.cc`, `.h` | Column buffer to numpy array conversion for `query_array` |
 | `marshal.cc`, `unmarshal.cc` | SQL value to Python object and back, for scalar calls |
 | `py_numpy.h` | The one include for the numpy C API; every source file that uses numpy includes it |
@@ -118,4 +119,4 @@ error. Places to re-check:
 |---|---|
 | All SQL functions | `Create_native_func`, `Plugin_function`, `Item_func_hybrid_field_type` |
 | `inhost.sql` (`query`, `query_sets`, `execute`, `query_array`) | Plugin SQL service. Beyond its functions: `mysql_real_connect_local()` creating a THD of its own when no THD is current; `MYSQL_RES::fields`; `MYSQL::methods->fetch_lengths` and `read_query_result` (details in `py_inhost_rowsink.cc`) |
-| Catalog | Plugin SQL service (`mysql_real_connect_local`) |
+| Catalog | Plugin SQL service, with `mysql_real_connect_local()` creating a THD of its own when no THD is current (`py_local_session.cc`) |

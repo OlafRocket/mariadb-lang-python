@@ -8,8 +8,8 @@ their own sections below.
 
 ## Server version
 
-- **Requires MariaDB 12.3 at the pinned release** (see
-  [BUILD.md](BUILD.md)).  The server is used unmodified.
+- **Requires MariaDB 12.3, the long-term support series, at the pinned
+  release** (see [BUILD.md](BUILD.md)).  The server is used unmodified.
 - **Bound to the exact server build.**  Function plugins carry
   `MariaDB_FUNCTION_INTERFACE_VERSION` (`MYSQL_VERSION_ID << 8`) and use
   internal server C++ classes, so the plugin is rebuilt for every server
@@ -27,9 +27,8 @@ their own sections below.
 - **Per-row calls from several connections slow each other down.**  Every
   call takes and releases the GIL, and a contended handover costs more
   than the call itself: measured, the total throughput of a per-row
-  `py_call` statement falls from 1.3 million rows per second with one
-  connection to about 0.22 million with eight (measured on the 13.3
-  line of the plugin).  `inhost.sql.query_array` builds its arrays in
+  `py_call` statement falls from 1.4 million rows per second with one
+  connection to about 0.25 million with eight.  `inhost.sql.query_array` builds its arrays in
   one step per result and is not affected to that degree.
 
 - **Python per-thread state within a statement is unspecified.**  The
@@ -144,6 +143,11 @@ their own sections below.
   and stores the whole result before the first row can be read.  Peak
   memory is the text result plus the converted columns.  There is no
   streaming, also not across the result sets of `query_sets()`.
+  Measured for one million rows of three numeric columns, against the
+  plugin line for MariaDB 13.3, which receives typed values:
+  `query_array()` 0.57 s against 0.12 s, `query()` 0.79 s against
+  0.34 s.  An indexed point query costs about 92 µs per call against
+  57 µs.
 
 - **`query_array()` returns VECTOR columns as `bytes`**, not as a 2-D
   `float32` array: the result metadata of the SQL service does not tell
@@ -187,6 +191,13 @@ their own sections below.
   (`SUM(py_call('f', x))`), once per row.
 
 ## Safety & operations
+
+- **`UNINSTALL PLUGIN` and `UNINSTALL SONAME` are unsafe while the
+  functions are in use.**  The server does not keep a function plugin
+  loaded for the statements that use it (MDEV-20846).  Uninstalling
+  while a statement runs, or while a prepared statement, a view or a
+  stored routine that calls a Python function is still cached, can
+  crash the server.  Uninstall only when no session uses the functions.
 
 - **No sandboxing: arbitrary code execution as the server user.**  Any
   caller of `py_eval`/`py_exec` runs arbitrary Python in the `mariadbd`

@@ -8,7 +8,7 @@ how far can an embedded language be taken beyond the classic stored
 procedure and stored function?
 
 Status: experimental. This is version 0.5: a plugin for an unmodified
-MariaDB 12.3 server. It is not intended for production use. See
+MariaDB 12.3 server (the long-term support series). It is not intended for production use. See
 [LIMITATIONS.md](LIMITATIONS.md).
 
 ## Research scope
@@ -24,7 +24,7 @@ once per statement. This project explores the uses outside that shape.
 | In-process server access | Can Python query the server it runs in, with no client connection? | The built-in `inhost` module on the plugin SQL service; `inhost.sql.query_array()` returns one numpy array per column |
 | Numerical and ML workloads | Can VECTOR arguments and bulk numeric data reach numpy without a Python object per cell? | VECTOR arguments as `float32` arrays; column buffers filled with the GIL released |
 | Aggregates and window functions | Can Python receive a whole group of rows as numpy arrays? | Not in this version: needs native aggregate function plugins, which MariaDB 12.3 does not have |
-| Cost | What does a Python call cost per row? | About 10 µs per row for a scalar call against 0.13 µs for native SQL; measured with the harness in [bench/](bench/README.md) |
+| Cost | What does a Python call cost per row? | About 0.5 µs per row for `py_call` and `py_exec`, 23 µs for `py_eval`, against 0.12 µs for native SQL; measured with the harness in [bench/](bench/README.md) |
 | Parallelism | Can Python calls of concurrent connections run in parallel? | Planned: free-threaded CPython |
 | Language integration | `CREATE FUNCTION / PROCEDURE / TRIGGER ... LANGUAGE PYTHON` | Later: needs server grammar changes |
 
