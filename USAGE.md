@@ -664,6 +664,12 @@ SELECT counter(), counter();                 -- 1, 2
 | Namespace | New for every call | One per session and routine |
 | Privileges, replication, dump | None | Those of stored routines |
 
+SQL from the body: there is no SQL interface on the calling session.
+The `inhost` module can be imported in a body, but `inhost.sql` runs
+without privilege checks, outside the transaction of the caller and
+outside the binary log; the list of its problems in routines is in the
+limits.
+
 Limits: [LIMITATIONS.md](LIMITATIONS.md#routines-in-the-language-python).
 
 ## Type mapping

@@ -216,9 +216,31 @@ Stored functions and procedures created with
 - **No aggregate functions.**  `CREATE AGGREGATE FUNCTION ... LANGUAGE
   PYTHON` is refused; `py_agg` is the aggregate form.
 
-- **No SQL from the body on the calling session.**  `inhost.sql` runs on
-  an internal connection with its own transaction, as for the functions
-  of the plugin.
+- **No SQL from the body on the calling session.**  The `inhost` module
+  can be imported in a body, and `inhost.sql` works there as in the
+  functions of the plugin.  It is not the SQL interface of routines and
+  has these problems when used from one (see also
+  [In-process DB access](#in-process-db-access-phase-16)):
+  - **No privilege checks.**  The internal session runs grants-free: a
+    body reads and writes any table, whatever the privileges of the
+    definer or of the caller.  `SQL SECURITY` has no effect on it.  A
+    user with `CREATE ROUTINE` reaches all data of the server through
+    it.
+  - **The declared data access is not enforced.**  A routine declared
+    `NO SQL` or `READS SQL DATA` can write through `inhost.sql`.
+  - **Writes are not written to the binary log.**  The routine is
+    replicated, the changes its body makes through `inhost.sql` are
+    not: a replica diverges.
+  - **Not part of the transaction of the caller.**  Each call is its own
+    session and transaction: it does not see uncommitted changes of the
+    calling statement, and its writes stay when the caller rolls back.
+  - **Lock waits against the caller.**  A statement on a table that the
+    calling statement has locked waits until the lock wait timeout.
+  - **Not interruptible.**  `KILL` and `max_statement_time` do not reach
+    the internal statement.
+  - **One internal session per call**, created and destroyed each time.
+  `SET GLOBAL lang_python_db_access = OFF` disables `inhost.sql` for the
+  whole server.
 
 - **Temporal arguments are `str`**, not objects of `datetime`.
 
