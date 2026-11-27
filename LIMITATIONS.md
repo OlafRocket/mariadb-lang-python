@@ -190,6 +190,55 @@ their own sections below.
 - **DECIMAL results are declared as `DECIMAL(64,38)`** in
   `CREATE TABLE ... SELECT`, since the function declares no precision.
 
+## Routines in the language PYTHON
+
+Stored functions and procedures created with
+`CREATE FUNCTION ... LANGUAGE PYTHON` and
+`CREATE PROCEDURE ... LANGUAGE PYTHON`.
+
+- **Default values of parameters are not applied.**  A routine declared
+  with `DEFAULT` (for example `b INT DEFAULT 10`) is accepted, and a call
+  that leaves the argument out passes NULL: the body receives `None`.
+  The server evaluates the default of a routine in SQL as part of its
+  body, which a routine in an external language does not have.  Pass
+  every argument, or test for `None` in the body.
+
+- **Requires a server with the language plugin type**
+  (`MariaDB_LANGUAGE_PLUGIN`), which MariaDB 13.3 does not have.
+
+- **`KILL` and `max_statement_time` do not stop a running body.**  The
+  statement ends when the body returns.
+
+- **The Python thread state is created and destroyed for every call.**
+  The per-row cost is higher than that of `py_call`, which keeps the
+  thread state for the statement.
+
+- **No aggregate functions.**  `CREATE AGGREGATE FUNCTION ... LANGUAGE
+  PYTHON` is refused; `py_agg` is the aggregate form.
+
+- **No SQL from the body on the calling session.**  `inhost.sql` runs on
+  an internal connection with its own transaction, as for the functions
+  of the plugin.
+
+- **Temporal arguments are `str`**, not objects of `datetime`.
+
+- **Containers are not results.**  A `dict`, `list`, `tuple` or `set`
+  is an error; a JSON result is returned as text (`json.dumps`).
+
+- **A parameter declared `JSON` arrives as `str`**, not parsed.
+
+- **ROW parameters and ROW return values are refused at `CREATE`.**
+
+- **No lax error mode.**  A Python exception always ends the statement;
+  `lang_python_strict_errors` is not read.
+
+- **A body that stops compiling** (for example after a change of the
+  interpreter version) is reported at the call as "Failed to load
+  routine"; the Python error is in `SHOW WARNINGS`.
+
+- **State in the namespace of a routine is per session.**  It is lost
+  when the session ends and is not shared with other sessions.
+
 ## Safety & operations
 
 - **No sandboxing: arbitrary code execution as the server user.**  Any

@@ -1,0 +1,166 @@
+#
+# lang_python: stored procedures in the language PYTHON
+#
+# An OUT or INOUT parameter is assigned by its name. The caller gets
+# what the name holds when the body ends
+CREATE PROCEDURE p1(a INT, b INT, OUT r INT) LANGUAGE PYTHON AS $$ r = a * b $$;
+SET @r = -1;
+CALL p1(6, 7, @r);
+SELECT @r;
+@r
+42
+CREATE PROCEDURE p2(IN s VARCHAR(20), INOUT n INT, OUT t VARCHAR(50), OUT d DOUBLE)
+LANGUAGE PYTHON AS $$
+    n = n + len(s)
+    t = s + ':' + str(n)
+    d = n / 4
+$$;
+SET @n = 10;
+CALL p2('abc', @n, @t, @d);
+SELECT @n, @t, @d;
+@n	@t	@d
+13	abc:13	3.25
+CALL p2('abcdef', @n, @t, @d);
+SELECT @n, @t, @d;
+@n	@t	@d
+19	abcdef:19	4.75
+# An OUT parameter starts as None, whatever the caller passes. One
+# that is not assigned gives NULL
+CREATE PROCEDURE p3(OUT a VARCHAR(20), OUT b INT) LANGUAGE PYTHON AS
+$$ a = str(a) + '/' + str(b) $$;
+SET @a = 'before', @b = 5;
+CALL p3(@a, @b);
+SELECT @a, @b;
+@a	@b
+None/None	NULL
+# The parameters are copied out after a return in the body
+CREATE PROCEDURE p4(n INT, OUT sign VARCHAR(10)) LANGUAGE PYTHON AS $$
+    if n < 0:
+        sign = 'negative'
+        return
+    if n == 0:
+        sign = 'zero'
+        return None
+    sign = 'positive'
+$$;
+CALL p4(-5, @s1);
+CALL p4(0, @s2);
+CALL p4(5, @s3);
+SELECT @s1, @s2, @s3;
+@s1	@s2	@s3
+negative	zero	positive
+# Without parameters, and with IN parameters only
+CREATE PROCEDURE p5() LANGUAGE PYTHON AS $$ x = 1 $$;
+CALL p5();
+CALL p5;
+CREATE PROCEDURE p6(a INT) LANGUAGE PYTHON AS $$ a = a + 1 $$;
+CALL p6(1);
+#
+# Types of OUT and INOUT parameters
+#
+CREATE PROCEDURE p7(INOUT big BIGINT UNSIGNED, INOUT dec1 DECIMAL(10,2),
+INOUT bin VARBINARY(10), INOUT day DATE,
+INOUT v VECTOR(2), OUT flag BOOLEAN)
+LANGUAGE PYTHON AS $$
+    big = big + 1
+    dec1 = dec1 * 2
+    bin = bin[::-1]
+    day = day.replace('-01', '-02')
+    v = v + 1
+    flag = True
+$$;
+SET @big = 18446744073709551614, @dec = 1.25, @bin = x'0102FF',
+@day = '2026-03-01', @v = VEC_FromText('[1,2]');
+CALL p7(@big, @dec, @bin, @day, @v, @flag);
+SELECT @big, @dec, HEX(@bin), @day, VEC_ToText(@v), @flag;
+@big	@dec	HEX(@bin)	@day	VEC_ToText(@v)	@flag
+18446744073709551615	2.50	FF0201	2026-03-02	[2,3]	1
+# A value that does not fit the parameter: an error in strict mode
+CREATE PROCEDURE p8(OUT n TINYINT, what INT) LANGUAGE PYTHON AS $$
+    n = 'abc' if what == 0 else 1000
+$$;
+CALL p8(@n, 0);
+ERROR 22007: Incorrect integer value: 'abc' for column ``.``.`n` at row 0
+CALL p8(@n, 1);
+ERROR 22003: Out of range value for column 'n' at row 0
+#
+# Errors
+#
+# return with a value is refused at CREATE
+CREATE PROCEDURE e1(OUT r INT) LANGUAGE PYTHON AS $$
+    r = 1
+    return r
+$$;
+ERROR 42000: Python: test.e1: SyntaxError: 'return' with a value in a procedure at line 3
+# Not in a nested function
+CREATE PROCEDURE p9(OUT r INT) LANGUAGE PYTHON AS $$
+    def inner():
+        return 41
+    r = inner() + 1
+$$;
+CALL p9(@r);
+SELECT @r;
+@r
+42
+# After an exception the caller keeps its values
+CREATE PROCEDURE p10(INOUT r INT) LANGUAGE PYTHON AS $$
+    r = r + 1
+    raise ValueError('not this time')
+$$;
+SET @r = 5;
+CALL p10(@r);
+ERROR HY000: Python: test.p10: ValueError: not this time at line 3
+SELECT @r;
+@r
+5
+# An OUT parameter that the body has deleted
+CREATE PROCEDURE p11(OUT r INT) LANGUAGE PYTHON AS $$ del r $$;
+CALL p11(@r);
+ERROR HY000: Python: test.p11: UnboundLocalError: cannot access local variable 'r' where it is not associated with a value at line 1
+#
+# Called from a routine in SQL, with local variables
+#
+CREATE PROCEDURE sql_p(OUT result VARCHAR(100))
+BEGIN
+DECLARE n INT DEFAULT 1;
+DECLARE t VARCHAR(50);
+DECLARE d DOUBLE;
+CALL p2('xy', n, t, d);
+CALL p2('z', n, t, d);
+SET result = CONCAT(n, ' ', t, ' ', d);
+END|
+CALL sql_p(@result);
+SELECT @result;
+@result
+4 z:4 1
+DROP PROCEDURE sql_p;
+# The definition in the catalog
+SHOW CREATE PROCEDURE p2;
+Procedure	p2
+sql_mode	STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION
+Create Procedure	CREATE DEFINER=`root`@`localhost` PROCEDURE `p2`(IN s VARCHAR(20), INOUT n INT, OUT t VARCHAR(50), OUT d DOUBLE)
+    LANGUAGE PYTHON
+AS $$
+    n = n + len(s)
+    t = s + ':' + str(n)
+    d = n / 4
+$$
+character_set_client	latin1
+collation_connection	latin1_swedish_ci
+Database Collation	utf8mb4_uca1400_ai_ci
+SELECT ROUTINE_NAME, ROUTINE_TYPE, ROUTINE_BODY, EXTERNAL_LANGUAGE
+FROM INFORMATION_SCHEMA.ROUTINES
+WHERE ROUTINE_SCHEMA = 'test' AND ROUTINE_NAME = 'p2';
+ROUTINE_NAME	ROUTINE_TYPE	ROUTINE_BODY	EXTERNAL_LANGUAGE
+p2	PROCEDURE	EXTERNAL	PYTHON
+DROP PROCEDURE p1;
+DROP PROCEDURE p2;
+DROP PROCEDURE p3;
+DROP PROCEDURE p4;
+DROP PROCEDURE p5;
+DROP PROCEDURE p6;
+DROP PROCEDURE p7;
+DROP PROCEDURE p8;
+DROP PROCEDURE p9;
+DROP PROCEDURE p10;
+DROP PROCEDURE p11;

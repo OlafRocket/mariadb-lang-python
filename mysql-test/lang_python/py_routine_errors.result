@@ -1,0 +1,185 @@
+#
+# lang_python: errors of routines in the language PYTHON, at CREATE
+# and at the call
+#
+#
+# A body that does not compile is refused at CREATE, with the line
+# of the body
+#
+CREATE FUNCTION e1(n INT) RETURNS INT LANGUAGE PYTHON AS $$ return n + $$;
+ERROR 42000: Python: test.e1: SyntaxError: invalid syntax at line 1
+CREATE FUNCTION e1(n INT) RETURNS INT LANGUAGE PYTHON AS $$
+    a = n + 1
+    b = a *
+    return b
+$$;
+ERROR 42000: Python: test.e1: SyntaxError: invalid syntax at line 3
+# Lines that do not share their indentation
+CREATE FUNCTION e1(n INT) RETURNS INT LANGUAGE PYTHON AS $$
+    a = n + 1
+  return a
+$$;
+ERROR 42000: Python: test.e1: IndentationError: unexpected indent at line 2
+# What a function body cannot contain
+CREATE FUNCTION e1(n INT) RETURNS INT LANGUAGE PYTHON AS $$
+    yield n
+$$;
+ERROR 42000: Python: test.e1: SyntaxError: 'yield' in the body of a routine at line 2
+CREATE FUNCTION e1(n INT) RETURNS INT LANGUAGE PYTHON AS $$ return await n $$;
+ERROR 42000: Python: test.e1: SyntaxError: 'await' outside async function at line 1
+CREATE FUNCTION e1(n INT) RETURNS INT LANGUAGE PYTHON AS $$
+    from os import *
+    return n
+$$;
+ERROR 42000: Python: test.e1: SyntaxError: import * only allowed at module level at line 2
+# A body cannot close the function that holds it
+CREATE FUNCTION e1(n INT) RETURNS INT LANGUAGE PYTHON AS $$
+    return n
+def other():
+    return 1
+$$;
+ERROR 42000: Python: test.e1: IndentationError: unexpected indent at line 2
+SELECT COUNT(*) FROM mysql.proc WHERE name = 'e1';
+COUNT(*)
+0
+#
+# Parameter names that the language does not accept
+#
+CREATE FUNCTION e1(class INT) RETURNS INT LANGUAGE PYTHON AS $$ return 1 $$;
+ERROR 42000: Python: test.e1: SyntaxError: the parameter name 'class' is not a Python name
+CREATE FUNCTION e1(`my value` INT) RETURNS INT LANGUAGE PYTHON AS $$ return 1 $$;
+ERROR 42000: Python: test.e1: SyntaxError: the parameter name 'my value' is not a Python name
+CREATE FUNCTION e1(`a): pass` INT) RETURNS INT LANGUAGE PYTHON AS $$ return 1 $$;
+ERROR 42000: Python: test.e1: SyntaxError: the parameter name 'a): pass' is not a Python name
+CREATE FUNCTION e1(`1a` INT) RETURNS INT LANGUAGE PYTHON AS $$ return 1 $$;
+ERROR 42000: Python: test.e1: SyntaxError: the parameter name '1a' is not a Python name
+CREATE FUNCTION e1(`None` INT) RETURNS INT LANGUAGE PYTHON AS $$ return 1 $$;
+ERROR 42000: Python: test.e1: SyntaxError: the parameter name 'None' is not a Python name
+# An aggregate function
+CREATE AGGREGATE FUNCTION e1(x INT) RETURNS INT LANGUAGE PYTHON AS $$ return x $$;
+ERROR 42000: This version of MariaDB doesn't yet support 'AGGREGATE FUNCTION in an external language'
+SELECT COUNT(*) FROM mysql.proc WHERE name = 'e1';
+COUNT(*)
+0
+#
+# Exceptions at the call, with the line of the body
+#
+CREATE FUNCTION e2(what VARCHAR(20)) RETURNS INT LANGUAGE PYTHON AS $$
+    def inner():
+        raise OverflowError('from the inner function')
+
+    nothing = None
+    if what == 'error':
+        raise RuntimeError('boom')
+    if what == 'name':
+        return undefined_function(1)
+    if what == 'none':
+        return nothing.x
+    if what == 'inner':
+        return inner()
+    if what == 'module':
+        import json
+        return json.loads('{')
+    if what == 'empty':
+        raise KeyError()
+    if what == 'exit':
+        raise SystemExit(3)
+    if what == 'caught':
+        try:
+            raise ValueError('x')
+        except ValueError:
+            return -1
+    return 0
+$$;
+SELECT e2('error');
+ERROR HY000: Python: test.e2: RuntimeError: boom at line 7
+SELECT e2('name');
+ERROR HY000: Python: test.e2: NameError: name 'undefined_function' is not defined at line 9
+SELECT e2('none');
+ERROR HY000: Python: test.e2: AttributeError: 'NoneType' object has no attribute 'x' at line 11
+SELECT e2('inner');
+ERROR HY000: Python: test.e2: OverflowError: from the inner function at line 3
+SELECT e2('module');
+ERROR HY000: Python: test.e2: JSONDecodeError: Expecting property name enclosed in double quotes: line 1 column 2 (char 1) at line 16
+SELECT e2('empty');
+ERROR HY000: Python: test.e2: KeyError at line 18
+SELECT e2('exit');
+ERROR HY000: Python: test.e2: SystemExit: 3 at line 20
+# The routine works after an error
+SELECT e2('caught'), e2('ok');
+e2('caught')	e2('ok')
+-1	0
+# An error in one row ends the statement
+CREATE TABLE t1 (w VARCHAR(20));
+INSERT INTO t1 VALUES ('ok'), ('caught'), ('error'), ('ok');
+SELECT e2(w) FROM t1;
+ERROR HY000: Python: test.e2: RuntimeError: boom at line 7
+INSERT INTO t1 SELECT e2(w) FROM t1;
+ERROR HY000: Python: test.e2: RuntimeError: boom at line 7
+SELECT COUNT(*) FROM t1;
+COUNT(*)
+4
+DROP TABLE t1;
+# lang_python_strict_errors is not read for routines: an exception
+# is an error
+SET SESSION lang_python_strict_errors = OFF;
+SELECT e2('error');
+ERROR HY000: Python: test.e2: RuntimeError: boom at line 7
+SELECT py_exec('raise RuntimeError("boom")', 'INT');
+py_exec('raise RuntimeError("boom")', 'INT')
+NULL
+Warnings:
+Warning	1105	py_exec: RuntimeError: boom
+SET SESSION lang_python_strict_errors = DEFAULT;
+# A handler of a routine in SQL catches the error
+CREATE FUNCTION sql_f(what VARCHAR(20)) RETURNS INT
+BEGIN
+DECLARE CONTINUE HANDLER FOR SQLEXCEPTION RETURN -99;
+RETURN e2(what);
+END|
+SELECT sql_f('error'), sql_f('ok');
+sql_f('error')	sql_f('ok')
+-99	0
+DROP FUNCTION sql_f;
+# A NULL argument in arithmetic is an exception, not NULL
+CREATE FUNCTION e3(x INT) RETURNS INT LANGUAGE PYTHON AS $$ return x + 1 $$;
+SELECT e3(NULL);
+ERROR HY000: Python: test.e3: TypeError: unsupported operand type(s) for +: 'NoneType' and 'int' at line 1
+SELECT e3(1);
+e3(1)
+2
+#
+# Recursion without an end is an exception, not a crash
+#
+CREATE FUNCTION deep(n INT) RETURNS INT LANGUAGE PYTHON AS $$
+    def r(k):
+        return 0 if k == 0 else r(k - 1) + 1
+    return r(n)
+$$;
+SELECT deep(20);
+deep(20)
+20
+SELECT deep(-1);
+ERROR HY000: Python: test.deep: RecursionError: maximum recursion depth exceeded at line N
+SELECT deep(20);
+deep(20)
+20
+#
+# A body that stops compiling: the error at the load of the routine
+#
+CREATE FUNCTION e4() RETURNS INT LANGUAGE PYTHON AS $$ return 1 $$;
+UPDATE mysql.proc SET body = 'return 1 +', body_utf8 = 'return 1 +'
+  WHERE name = 'e4';
+connect  con2, localhost, root,,;
+SELECT e4();
+ERROR HY000: Failed to load routine test.e4 (internal code -6). For more details, run SHOW WARNINGS
+SHOW WARNINGS;
+Level	Code	Message
+Error	1064	Python: test.e4: SyntaxError: invalid syntax at line 1
+Error	1457	Failed to load routine test.e4 (internal code -6). For more details, run SHOW WARNINGS
+disconnect con2;
+connection default;
+DROP FUNCTION e2;
+DROP FUNCTION e3;
+DROP FUNCTION deep;
+DROP FUNCTION e4;

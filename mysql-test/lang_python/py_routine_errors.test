@@ -1,0 +1,187 @@
+--echo #
+--echo # lang_python: errors of routines in the language PYTHON, at CREATE
+--echo # and at the call
+--echo #
+
+--echo #
+--echo # A body that does not compile is refused at CREATE, with the line
+--echo # of the body
+--echo #
+
+--error ER_PARSE_ERROR
+CREATE FUNCTION e1(n INT) RETURNS INT LANGUAGE PYTHON AS $$ return n + $$;
+
+--error ER_PARSE_ERROR
+CREATE FUNCTION e1(n INT) RETURNS INT LANGUAGE PYTHON AS $$
+    a = n + 1
+    b = a *
+    return b
+$$;
+
+--echo # Lines that do not share their indentation
+--error ER_PARSE_ERROR
+CREATE FUNCTION e1(n INT) RETURNS INT LANGUAGE PYTHON AS $$
+    a = n + 1
+  return a
+$$;
+
+--echo # What a function body cannot contain
+--error ER_PARSE_ERROR
+CREATE FUNCTION e1(n INT) RETURNS INT LANGUAGE PYTHON AS $$
+    yield n
+$$;
+--error ER_PARSE_ERROR
+CREATE FUNCTION e1(n INT) RETURNS INT LANGUAGE PYTHON AS $$ return await n $$;
+--error ER_PARSE_ERROR
+CREATE FUNCTION e1(n INT) RETURNS INT LANGUAGE PYTHON AS $$
+    from os import *
+    return n
+$$;
+
+--echo # A body cannot close the function that holds it
+--error ER_PARSE_ERROR
+CREATE FUNCTION e1(n INT) RETURNS INT LANGUAGE PYTHON AS $$
+    return n
+def other():
+    return 1
+$$;
+
+SELECT COUNT(*) FROM mysql.proc WHERE name = 'e1';
+
+--echo #
+--echo # Parameter names that the language does not accept
+--echo #
+
+--error ER_PARSE_ERROR
+CREATE FUNCTION e1(class INT) RETURNS INT LANGUAGE PYTHON AS $$ return 1 $$;
+--error ER_PARSE_ERROR
+CREATE FUNCTION e1(`my value` INT) RETURNS INT LANGUAGE PYTHON AS $$ return 1 $$;
+--error ER_PARSE_ERROR
+CREATE FUNCTION e1(`a): pass` INT) RETURNS INT LANGUAGE PYTHON AS $$ return 1 $$;
+--error ER_PARSE_ERROR
+CREATE FUNCTION e1(`1a` INT) RETURNS INT LANGUAGE PYTHON AS $$ return 1 $$;
+--error ER_PARSE_ERROR
+CREATE FUNCTION e1(`None` INT) RETURNS INT LANGUAGE PYTHON AS $$ return 1 $$;
+
+--echo # An aggregate function
+--error ER_NOT_SUPPORTED_YET
+CREATE AGGREGATE FUNCTION e1(x INT) RETURNS INT LANGUAGE PYTHON AS $$ return x $$;
+
+SELECT COUNT(*) FROM mysql.proc WHERE name = 'e1';
+
+--echo #
+--echo # Exceptions at the call, with the line of the body
+--echo #
+
+CREATE FUNCTION e2(what VARCHAR(20)) RETURNS INT LANGUAGE PYTHON AS $$
+    def inner():
+        raise OverflowError('from the inner function')
+
+    nothing = None
+    if what == 'error':
+        raise RuntimeError('boom')
+    if what == 'name':
+        return undefined_function(1)
+    if what == 'none':
+        return nothing.x
+    if what == 'inner':
+        return inner()
+    if what == 'module':
+        import json
+        return json.loads('{')
+    if what == 'empty':
+        raise KeyError()
+    if what == 'exit':
+        raise SystemExit(3)
+    if what == 'caught':
+        try:
+            raise ValueError('x')
+        except ValueError:
+            return -1
+    return 0
+$$;
+--error ER_UNKNOWN_ERROR
+SELECT e2('error');
+--error ER_UNKNOWN_ERROR
+SELECT e2('name');
+--error ER_UNKNOWN_ERROR
+SELECT e2('none');
+--error ER_UNKNOWN_ERROR
+SELECT e2('inner');
+--error ER_UNKNOWN_ERROR
+SELECT e2('module');
+--error ER_UNKNOWN_ERROR
+SELECT e2('empty');
+--error ER_UNKNOWN_ERROR
+SELECT e2('exit');
+--echo # The routine works after an error
+SELECT e2('caught'), e2('ok');
+
+--echo # An error in one row ends the statement
+CREATE TABLE t1 (w VARCHAR(20));
+INSERT INTO t1 VALUES ('ok'), ('caught'), ('error'), ('ok');
+--error ER_UNKNOWN_ERROR
+SELECT e2(w) FROM t1;
+--error ER_UNKNOWN_ERROR
+INSERT INTO t1 SELECT e2(w) FROM t1;
+SELECT COUNT(*) FROM t1;
+DROP TABLE t1;
+
+--echo # lang_python_strict_errors is not read for routines: an exception
+--echo # is an error
+SET SESSION lang_python_strict_errors = OFF;
+--error ER_UNKNOWN_ERROR
+SELECT e2('error');
+SELECT py_exec('raise RuntimeError("boom")', 'INT');
+SET SESSION lang_python_strict_errors = DEFAULT;
+
+--echo # A handler of a routine in SQL catches the error
+DELIMITER |;
+CREATE FUNCTION sql_f(what VARCHAR(20)) RETURNS INT
+BEGIN
+  DECLARE CONTINUE HANDLER FOR SQLEXCEPTION RETURN -99;
+  RETURN e2(what);
+END|
+DELIMITER ;|
+SELECT sql_f('error'), sql_f('ok');
+DROP FUNCTION sql_f;
+
+--echo # A NULL argument in arithmetic is an exception, not NULL
+CREATE FUNCTION e3(x INT) RETURNS INT LANGUAGE PYTHON AS $$ return x + 1 $$;
+--error ER_UNKNOWN_ERROR
+SELECT e3(NULL);
+SELECT e3(1);
+
+--echo #
+--echo # Recursion without an end is an exception, not a crash
+--echo #
+
+CREATE FUNCTION deep(n INT) RETURNS INT LANGUAGE PYTHON AS $$
+    def r(k):
+        return 0 if k == 0 else r(k - 1) + 1
+    return r(n)
+$$;
+SELECT deep(20);
+--replace_regex /at line [0-9]+/at line N/
+--error ER_UNKNOWN_ERROR
+SELECT deep(-1);
+SELECT deep(20);
+
+--echo #
+--echo # A body that stops compiling: the error at the load of the routine
+--echo #
+
+CREATE FUNCTION e4() RETURNS INT LANGUAGE PYTHON AS $$ return 1 $$;
+UPDATE mysql.proc SET body = 'return 1 +', body_utf8 = 'return 1 +'
+  WHERE name = 'e4';
+connect (con2, localhost, root,,);
+--error ER_SP_PROC_TABLE_CORRUPT
+SELECT e4();
+SHOW WARNINGS;
+disconnect con2;
+connection default;
+
+DROP FUNCTION e2;
+DROP FUNCTION e3;
+DROP FUNCTION deep;
+DROP FUNCTION e4;

@@ -1,0 +1,268 @@
+#
+# lang_python: stored functions in the language PYTHON
+#
+SELECT PLUGIN_NAME, PLUGIN_TYPE, PLUGIN_STATUS
+FROM INFORMATION_SCHEMA.PLUGINS WHERE PLUGIN_NAME = 'PYTHON';
+PLUGIN_NAME	PLUGIN_TYPE	PLUGIN_STATUS
+PYTHON	LANGUAGE	ACTIVE
+# The body is the body of a function. The parameters are the SQL
+# parameters; return gives the result
+CREATE FUNCTION f1(x INT, y INT) RETURNS INT LANGUAGE PYTHON AS $$ return x * y $$;
+SELECT f1(6, 7), f1(-3, 1), f1(0, 5);
+f1(6, 7)	f1(-3, 1)	f1(0, 5)
+42	-3	0
+# A NULL argument is None
+CREATE FUNCTION f2(x INT) RETURNS VARCHAR(20) LANGUAGE PYTHON AS
+$$ return 'none' if x is None else 'value' $$;
+SELECT f2(NULL), f2(1);
+f2(NULL)	f2(1)
+none	value
+# A body indented to match the SQL, with a nested function, an
+# import and a condition. The name of the language ignores case
+CREATE FUNCTION f3(a VARCHAR(20), b VARCHAR(20)) RETURNS VARCHAR(50)
+LANGUAGE python DETERMINISTIC NO SQL AS $$
+    import math
+
+    def shout(s):
+        return s.upper()
+
+    if len(a) > 3:
+        sep = ' -- '
+    else:
+        sep = '; '
+    return shout(a) + sep + b + ' ' + str(math.gcd(12, 18))
+$$;
+SELECT f3('ab', 'cd'), f3('abcd', "it's");
+f3('ab', 'cd')	f3('abcd', "it's")
+AB; cd 6	ABCD -- it's 6
+# A body that starts at the first column
+CREATE FUNCTION f4(n INT) RETURNS INT LANGUAGE PYTHON AS $$
+total = 0
+for i in range(n + 1):
+    total += i
+return total
+$$;
+SELECT f4(10), f4(100);
+f4(10)	f4(100)
+55	5050
+# A body without return, a return without a value, and an empty
+# body give NULL
+CREATE FUNCTION f5() RETURNS INT LANGUAGE PYTHON AS $$ x = 1 $$;
+CREATE FUNCTION f6(n INT) RETURNS INT LANGUAGE PYTHON AS $$
+  if n > 0:
+      return
+  return n
+$$;
+CREATE FUNCTION f7() RETURNS INT LANGUAGE PYTHON AS $$ $$;
+SELECT f5(), f6(1), f6(-1), f7();
+f5()	f6(1)	f6(-1)	f7()
+NULL	NULL	-1	NULL
+# The body as a string literal
+CREATE FUNCTION f8(n INT) RETURNS INT LANGUAGE PYTHON AS 'return n + 1';
+SELECT f8(41);
+f8(41)
+42
+# A parameter is used in the spelling of its declaration
+CREATE FUNCTION f9(Total INT, `rate_` DOUBLE) RETURNS DOUBLE
+LANGUAGE PYTHON AS $$ return Total * rate_ $$;
+SELECT f9(10, 0.5);
+f9(10, 0.5)
+5
+# The common indentation is removed from the whole body, also from
+# the lines of a string that spans lines
+CREATE FUNCTION f10() RETURNS VARCHAR(100) LANGUAGE PYTHON AS $$
+    text = """first
+      second
+    third"""
+    return text.replace('\n', '|')
+$$;
+SELECT f10();
+f10()
+first|  second|third
+# The definition in the catalog
+SHOW CREATE FUNCTION f3;
+Function	f3
+sql_mode	STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION
+Create Function	CREATE DEFINER=`root`@`localhost` FUNCTION `f3`(a VARCHAR(20), b VARCHAR(20)) RETURNS varchar(50) CHARSET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci
+    LANGUAGE PYTHON
+    NO SQL
+    DETERMINISTIC
+AS $$
+    import math
+
+    def shout(s):
+        return s.upper()
+
+    if len(a) > 3:
+        sep = ' -- '
+    else:
+        sep = '; '
+    return shout(a) + sep + b + ' ' + str(math.gcd(12, 18))
+$$
+character_set_client	latin1
+collation_connection	latin1_swedish_ci
+Database Collation	utf8mb4_uca1400_ai_ci
+SELECT ROUTINE_NAME, ROUTINE_BODY, EXTERNAL_LANGUAGE, IS_DETERMINISTIC,
+SQL_DATA_ACCESS, ROUTINE_DEFINITION
+FROM INFORMATION_SCHEMA.ROUTINES
+WHERE ROUTINE_SCHEMA = 'test' AND ROUTINE_NAME IN ('f1', 'f3');
+ROUTINE_NAME	f1
+ROUTINE_BODY	EXTERNAL
+EXTERNAL_LANGUAGE	PYTHON
+IS_DETERMINISTIC	NO
+SQL_DATA_ACCESS	CONTAINS SQL
+ROUTINE_DEFINITION	 return x * y 
+ROUTINE_NAME	f3
+ROUTINE_BODY	EXTERNAL
+EXTERNAL_LANGUAGE	PYTHON
+IS_DETERMINISTIC	YES
+SQL_DATA_ACCESS	NO SQL
+ROUTINE_DEFINITION	
+    import math
+
+    def shout(s):
+        return s.upper()
+
+    if len(a) > 3:
+        sep = ' -- '
+    else:
+        sep = '; '
+    return shout(a) + sep + b + ' ' + str(math.gcd(12, 18))
+
+SELECT name, language, HEX(body) FROM mysql.proc WHERE name = 'f1';
+name	language	HEX(body)
+f1	PYTHON	2072657475726E2078202A207920
+#
+# In statements
+#
+CREATE TABLE t1 (a INT, b VARCHAR(20));
+INSERT INTO t1 VALUES (1, 'one'), (2, 'two'), (3, NULL), (4, 'four');
+SELECT a, f1(a, 10), f2(a), f3(b, 'x') FROM t1 WHERE b IS NOT NULL ORDER BY a;
+a	f1(a, 10)	f2(a)	f3(b, 'x')
+1	10	value	ONE; x 6
+2	20	value	TWO; x 6
+4	40	value	FOUR -- x 6
+SELECT a FROM t1 WHERE f1(a, a) > 5 ORDER BY f1(a, -1);
+a
+4
+3
+SELECT SUM(f1(a, 2)), MAX(f4(a)) FROM t1;
+SUM(f1(a, 2))	MAX(f4(a))
+20	10
+UPDATE t1 SET a = f1(a, 100) WHERE f4(a) = 3;
+SELECT a FROM t1 ORDER BY a;
+a
+1
+3
+4
+200
+CREATE VIEW v1 AS SELECT a, f1(a, 2) AS twice FROM t1;
+SELECT * FROM v1 ORDER BY a;
+a	twice
+1	2
+3	6
+4	8
+200	400
+PREPARE s FROM 'SELECT f1(?, ?)';
+SET @a = 8, @b = 9;
+EXECUTE s USING @a, @b;
+f1(?, ?)
+72
+EXECUTE s USING @b, @b;
+f1(?, ?)
+81
+DEALLOCATE PREPARE s;
+DROP VIEW v1;
+DROP TABLE t1;
+# Called from a routine in SQL
+CREATE FUNCTION sql_f(n INT) RETURNS INT
+BEGIN
+DECLARE r INT DEFAULT 0;
+SET r = f1(n, n) + f4(n);
+RETURN r;
+END|
+SELECT sql_f(4);
+sql_f(4)
+26
+DROP FUNCTION sql_f;
+#
+# The namespace: one per session and routine
+#
+CREATE FUNCTION counter() RETURNS INT LANGUAGE PYTHON AS $$
+    global calls
+    calls = globals().get('calls', 0) + 1
+    return calls
+$$;
+CREATE FUNCTION counter2() RETURNS INT LANGUAGE PYTHON AS $$
+    return globals().get('calls', -1)
+$$;
+SELECT counter(), counter(), counter();
+counter()	counter()	counter()
+1	2	3
+SELECT counter();
+counter()
+4
+# Another routine of the session does not see it
+SELECT counter2();
+counter2()
+-1
+# Another session starts with its own. It compiles the routine
+# when it loads it
+connect  con2, localhost, root,,;
+SELECT counter(), f1(2, 3), f3('x', 'y');
+counter()	f1(2, 3)	f3('x', 'y')
+1	6	X; y 6
+disconnect con2;
+connection default;
+SELECT counter();
+counter()
+5
+# Modules are those of the interpreter, shared by the sessions:
+# the namespace of the routine is not
+CREATE FUNCTION namespace_names() RETURNS VARCHAR(200) LANGUAGE PYTHON AS $$
+    return ','.join(sorted(n for n in globals() if not n.startswith('__mariadb')))
+$$;
+SELECT namespace_names();
+namespace_names()
+__builtins__,__name__
+#
+# CREATE OR REPLACE, IF NOT EXISTS, DROP
+#
+CREATE OR REPLACE FUNCTION f1(x INT, y INT) RETURNS INT LANGUAGE PYTHON AS
+$$ return x + y $$;
+SELECT f1(6, 7);
+f1(6, 7)
+13
+CREATE FUNCTION IF NOT EXISTS f1(x INT, y INT) RETURNS INT LANGUAGE PYTHON AS
+$$ return 0 $$;
+Warnings:
+Note	1304	FUNCTION f1 already exists
+SELECT f1(6, 7);
+f1(6, 7)
+13
+# A replaced function starts with a new namespace
+CREATE OR REPLACE FUNCTION counter() RETURNS INT LANGUAGE PYTHON AS $$
+    global calls
+    calls = globals().get('calls', 100) + 1
+    return calls
+$$;
+SELECT counter();
+counter()
+101
+# The functions of the plugin are available beside the routines
+SELECT py_eval('args[0] + 1', 'INT', f1(1, 2));
+py_eval('args[0] + 1', 'INT', f1(1, 2))
+4
+DROP FUNCTION f1;
+DROP FUNCTION f2;
+DROP FUNCTION f3;
+DROP FUNCTION f4;
+DROP FUNCTION f5;
+DROP FUNCTION f6;
+DROP FUNCTION f7;
+DROP FUNCTION f8;
+DROP FUNCTION f9;
+DROP FUNCTION f10;
+DROP FUNCTION counter;
+DROP FUNCTION counter2;
+DROP FUNCTION namespace_names;

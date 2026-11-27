@@ -110,6 +110,11 @@ More examples, including triggers that call external services, are in
 | `py_agg(name, cols...)` | Aggregate or window function: pass each group to a named function or aggregate as numpy arrays |
 | `py_create_aggregate`, `py_replace_aggregate` | Manage named Python aggregates (a class with `step` / `finalize`) |
 
+| SQL statement | Purpose |
+|---|---|
+| `CREATE FUNCTION ... LANGUAGE PYTHON AS $$ ... $$` | Stored function with a Python body, called by name |
+| `CREATE PROCEDURE ... LANGUAGE PYTHON AS $$ ... $$` | Stored procedure with IN, OUT and INOUT parameters |
+
 | Python module | Purpose |
 |---|---|
 | `inhost.sql.query()`, `query_sets()` | Run a statement in the hosting server, return rows |

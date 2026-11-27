@@ -1,0 +1,271 @@
+--echo #
+--echo # lang_python: SQL values as Python objects and back, in routines of
+--echo # the language PYTHON
+--echo #
+
+--echo #
+--echo # Arguments. Each function describes what it receives
+--echo #
+
+CREATE FUNCTION d_int(x INT) RETURNS VARCHAR(100) LANGUAGE PYTHON AS
+$$ return type(x).__name__ + ' ' + repr(x) $$;
+CREATE FUNCTION d_uint(x INT UNSIGNED) RETURNS VARCHAR(100) LANGUAGE PYTHON AS
+$$ return type(x).__name__ + ' ' + repr(x) $$;
+CREATE FUNCTION d_tiny(x TINYINT) RETURNS VARCHAR(100) LANGUAGE PYTHON AS
+$$ return type(x).__name__ + ' ' + repr(x) $$;
+CREATE FUNCTION d_bool(x BOOLEAN) RETURNS VARCHAR(100) LANGUAGE PYTHON AS
+$$ return type(x).__name__ + ' ' + repr(x) $$;
+CREATE FUNCTION d_big(x BIGINT) RETURNS VARCHAR(100) LANGUAGE PYTHON AS
+$$ return type(x).__name__ + ' ' + repr(x) $$;
+CREATE FUNCTION d_ubig(x BIGINT UNSIGNED) RETURNS VARCHAR(100) LANGUAGE PYTHON AS
+$$ return type(x).__name__ + ' ' + repr(x) $$;
+CREATE FUNCTION d_double(x DOUBLE) RETURNS VARCHAR(100) LANGUAGE PYTHON AS
+$$ return type(x).__name__ + ' ' + repr(x) $$;
+CREATE FUNCTION d_float(x FLOAT) RETURNS VARCHAR(100) LANGUAGE PYTHON AS
+$$ return type(x).__name__ + ' ' + repr(x) $$;
+CREATE FUNCTION d_dec(x DECIMAL(30,5)) RETURNS VARCHAR(100) LANGUAGE PYTHON AS
+$$ return type(x).__name__ + ' ' + repr(x) $$;
+CREATE FUNCTION d_year(x YEAR) RETURNS VARCHAR(100) LANGUAGE PYTHON AS
+$$ return type(x).__name__ + ' ' + repr(x) $$;
+CREATE FUNCTION d_bit(x BIT(8)) RETURNS VARCHAR(100) LANGUAGE PYTHON AS
+$$ return type(x).__name__ + ' ' + repr(x) $$;
+CREATE FUNCTION d_date(x DATE) RETURNS VARCHAR(100) LANGUAGE PYTHON AS
+$$ return type(x).__name__ + ' ' + repr(x) $$;
+CREATE FUNCTION d_time(x TIME(2)) RETURNS VARCHAR(100) LANGUAGE PYTHON AS
+$$ return type(x).__name__ + ' ' + repr(x) $$;
+CREATE FUNCTION d_datetime(x DATETIME(3)) RETURNS VARCHAR(100) LANGUAGE PYTHON AS
+$$ return type(x).__name__ + ' ' + repr(x) $$;
+CREATE FUNCTION d_text(x VARCHAR(50) CHARACTER SET utf8mb4) RETURNS VARCHAR(100) CHARACTER SET utf8mb4 LANGUAGE PYTHON AS
+$$ return type(x).__name__ + ' ' + str(len(x)) + ' ' + x $$;
+CREATE FUNCTION d_latin1(x VARCHAR(50) CHARACTER SET latin1) RETURNS VARCHAR(100) CHARACTER SET utf8mb4 LANGUAGE PYTHON AS
+$$ return type(x).__name__ + ' ' + str(len(x)) + ' ' + x $$;
+CREATE FUNCTION d_longtext(x LONGTEXT) RETURNS VARCHAR(100) LANGUAGE PYTHON AS
+$$ return type(x).__name__ + ' ' + str(len(x)) $$;
+CREATE FUNCTION d_bin(x VARBINARY(50)) RETURNS VARCHAR(100) LANGUAGE PYTHON AS
+$$ return type(x).__name__ + ' ' + str(list(x)) $$;
+CREATE FUNCTION d_blob(x BLOB) RETURNS VARCHAR(100) LANGUAGE PYTHON AS
+$$ return type(x).__name__ + ' ' + str(list(x)) $$;
+CREATE FUNCTION d_vector(x VECTOR(3)) RETURNS VARCHAR(100) LANGUAGE PYTHON AS
+$$ return type(x).__name__ + ' ' + (str(x.dtype) + ' ' + str(x.tolist()) if hasattr(x, 'dtype') else str(len(x))) $$;
+CREATE FUNCTION d_json(x JSON) RETURNS VARCHAR(100) LANGUAGE PYTHON AS
+$$ return type(x).__name__ + ' ' + x $$;
+CREATE FUNCTION d_uuid(x UUID) RETURNS VARCHAR(100) LANGUAGE PYTHON AS
+$$ return type(x).__name__ + ' ' + repr(x) $$;
+CREATE FUNCTION d_inet6(x INET6) RETURNS VARCHAR(100) LANGUAGE PYTHON AS
+$$ return type(x).__name__ + ' ' + repr(x) $$;
+CREATE FUNCTION d_enum(x ENUM('small', 'large')) RETURNS VARCHAR(100) LANGUAGE PYTHON AS
+$$ return type(x).__name__ + ' ' + repr(x) $$;
+
+SELECT d_int(42), d_int(-2147483648), d_int(NULL);
+SELECT d_uint(4294967295), d_tiny(-128), d_bool(TRUE), d_bool(FALSE);
+SELECT d_big(9223372036854775807), d_big(-9223372036854775808);
+SELECT d_ubig(18446744073709551615);
+SELECT d_double(1.5), d_double(-1e300), d_double(3), d_float(0.25);
+SELECT d_dec(12345678901234567890.12345), d_dec(-0.5);
+SELECT d_year(2026), d_bit(b'101');
+SELECT d_date('2026-02-28'), d_time('12:34:56.78'), d_datetime('2026-02-28 23:59:59.123');
+SET NAMES utf8mb4;
+SELECT d_text('grüße €'), d_text(''), d_text('𝄞');
+SELECT d_latin1(CONVERT('grüße' USING latin1));
+SET NAMES latin1;
+SELECT d_longtext(REPEAT('x', 100000));
+SELECT d_bin(x'00FF10'), d_bin(''), d_blob(x'0102');
+SELECT d_vector(VEC_FromText('[1,2.5,-3]'));
+SELECT d_json('{"a": 1, "b": [true, null]}');
+SELECT d_uuid('123e4567-e89b-12d3-a456-426655440000'), d_inet6('::ffff:192.0.2.1');
+SELECT d_enum('large');
+
+--echo # VECTOR as bytes
+SET @save_vector_numpy = @@global.lang_python_vector_numpy;
+SET GLOBAL lang_python_vector_numpy = OFF;
+SELECT d_vector(VEC_FromText('[1,2.5,-3]'));
+SET GLOBAL lang_python_vector_numpy = @save_vector_numpy;
+
+--echo #
+--echo # Results. The server converts the value to the declared type
+--echo #
+
+CREATE FUNCTION r_int(what VARCHAR(20)) RETURNS INT LANGUAGE PYTHON AS $$
+    import decimal
+    values = {'int': 42, 'float': 41.5, 'string': '43', 'true': True,
+              'false': False, 'decimal': decimal.Decimal('44.4'),
+              'none': None, 'text': 'abc', 'large': 2 ** 40}
+    return values[what]
+$$;
+SELECT r_int('int'), r_int('float'), r_int('string'), r_int('true'),
+       r_int('false'), r_int('decimal'), r_int('none');
+--echo # In strict mode a value that does not fit is an error
+--error ER_TRUNCATED_WRONG_VALUE_FOR_FIELD
+SELECT r_int('text');
+--error ER_WARN_DATA_OUT_OF_RANGE
+SELECT r_int('large');
+--echo # The sql_mode of the definition counts, as for a routine in SQL
+SET @save_sql_mode = @@sql_mode;
+SET sql_mode = '';
+--error ER_TRUNCATED_WRONG_VALUE_FOR_FIELD
+SELECT r_int('text');
+CREATE FUNCTION r_int_lax(what VARCHAR(20)) RETURNS INT LANGUAGE PYTHON AS
+$$ return '12abc' if what == 'text' else 2 ** 40 $$;
+SET sql_mode = @save_sql_mode;
+SELECT r_int_lax('text'), r_int_lax('large');
+
+CREATE FUNCTION r_ubig(n INT) RETURNS BIGINT UNSIGNED LANGUAGE PYTHON AS
+$$ return 2 ** 64 - n $$;
+SELECT r_ubig(1), r_ubig(2);
+--error ER_WARN_DATA_OUT_OF_RANGE
+SELECT r_ubig(0);
+
+CREATE FUNCTION r_big(n BIGINT) RETURNS BIGINT LANGUAGE PYTHON AS
+$$ return n - 1 $$;
+SELECT r_big(-9223372036854775807), r_big(9223372036854775807), r_big(10);
+
+CREATE FUNCTION r_double(x DOUBLE) RETURNS DOUBLE LANGUAGE PYTHON AS $$
+    import math
+    return math.sqrt(x)
+$$;
+SELECT r_double(2), r_double(16);
+
+--echo # DECIMAL keeps its digits in both directions
+CREATE FUNCTION r_dec(x DECIMAL(30,5)) RETURNS DECIMAL(30,5) LANGUAGE PYTHON AS
+$$ return x + 1 $$;
+SELECT r_dec(12345678901234567890.12345);
+--echo # An int beyond 64 bits is stored as its digits
+CREATE FUNCTION r_dec2() RETURNS DECIMAL(40,0) LANGUAGE PYTHON AS
+$$ return 2 ** 100 $$;
+SELECT r_dec2();
+
+--echo # The body is in the character set of the client that creates the
+--echo # function
+SET NAMES utf8mb4;
+CREATE FUNCTION r_text(what VARCHAR(20)) RETURNS VARCHAR(100) CHARACTER SET utf8mb4 LANGUAGE PYTHON AS $$
+    import datetime, decimal, fractions
+    values = {'int': 42, 'float': 1.5, 'big': 2 ** 70, 'true': True,
+              'unicode': 'grüße € 𝄞', 'empty': '',
+              'bytes': b'abc', 'decimal': decimal.Decimal('1.50'),
+              'date': datetime.date(2026, 2, 28),
+              'object': fractions.Fraction(3, 4)}
+    return values[what]
+$$;
+SELECT r_text('int'), r_text('float'), r_text('big'), r_text('true');
+SELECT r_text('unicode'), r_text('empty'), r_text('bytes'), r_text('decimal');
+SELECT r_text('date'), r_text('object');
+CREATE FUNCTION r_latin1() RETURNS VARCHAR(100) CHARACTER SET latin1 LANGUAGE PYTHON AS
+$$ return 'grüße' $$;
+SELECT r_latin1(), HEX(r_latin1());
+SET NAMES latin1;
+
+--echo # Temporal types take the text form and the classes of datetime
+CREATE FUNCTION r_date(what INT) RETURNS DATE LANGUAGE PYTHON AS $$
+    import datetime
+    return '2026-02-28' if what == 0 else datetime.date(2027, 1, 31)
+$$;
+CREATE FUNCTION r_datetime() RETURNS DATETIME(3) LANGUAGE PYTHON AS $$
+    import datetime
+    return datetime.datetime(2026, 2, 28, 23, 59, 59, 123000)
+$$;
+SELECT r_date(0), r_date(1), r_datetime();
+
+--echo # Binary results
+CREATE FUNCTION r_bin(what INT) RETURNS VARBINARY(20) LANGUAGE PYTHON AS $$
+    if what == 0:
+        return b'\x00\xff\x10'
+    if what == 1:
+        return bytearray([1, 2, 3])
+    return memoryview(b'xyz')
+$$;
+SELECT HEX(r_bin(0)), HEX(r_bin(1)), HEX(r_bin(2));
+
+--echo # VECTOR: a float32 array, or its bytes
+CREATE FUNCTION r_vector(v VECTOR(3)) RETURNS VECTOR(3) LANGUAGE PYTHON AS
+$$ return v * 2 $$;
+CREATE FUNCTION r_vector2() RETURNS VECTOR(2) LANGUAGE PYTHON AS $$
+    import struct
+    return struct.pack('<2f', 0.5, -1.0)
+$$;
+SELECT VEC_ToText(r_vector(VEC_FromText('[1,2.5,-3]'))), VEC_ToText(r_vector2());
+
+--echo # A JSON return type is text for the plugin: the body returns text
+CREATE FUNCTION r_json(x JSON) RETURNS JSON LANGUAGE PYTHON AS $$
+    import json
+    value = json.loads(x)
+    value['added'] = True
+    return json.dumps(value)
+$$;
+SELECT r_json('{"a": 1}');
+
+--echo #
+--echo # Values without an SQL value
+--echo #
+
+CREATE FUNCTION r_none(what VARCHAR(20)) RETURNS VARCHAR(100) LANGUAGE PYTHON AS $$
+    values = {'nan': float('nan'), 'inf': float('-inf'), 'list': [1, 2],
+              'dict': {'a': 1}, 'tuple': (1, 2), 'set': {1},
+              'function': len, 'lambda': lambda: 1, 'class': int,
+              'generator': (i for i in range(3))}
+    return values[what]
+$$;
+--error ER_UNKNOWN_ERROR
+SELECT r_none('nan');
+--error ER_UNKNOWN_ERROR
+SELECT r_none('inf');
+--error ER_UNKNOWN_ERROR
+SELECT r_none('list');
+--error ER_UNKNOWN_ERROR
+SELECT r_none('dict');
+--error ER_UNKNOWN_ERROR
+SELECT r_none('tuple');
+--error ER_UNKNOWN_ERROR
+SELECT r_none('set');
+--error ER_UNKNOWN_ERROR
+SELECT r_none('function');
+--error ER_UNKNOWN_ERROR
+SELECT r_none('lambda');
+--error ER_UNKNOWN_ERROR
+SELECT r_none('class');
+--error ER_UNKNOWN_ERROR
+SELECT r_none('generator');
+
+--echo # A ROW parameter is refused at CREATE
+--error ER_NOT_SUPPORTED_YET
+CREATE FUNCTION e1(r ROW(a INT, b INT)) RETURNS INT LANGUAGE PYTHON AS $$ return 1 $$;
+
+DROP FUNCTION d_int;
+DROP FUNCTION d_uint;
+DROP FUNCTION d_tiny;
+DROP FUNCTION d_bool;
+DROP FUNCTION d_big;
+DROP FUNCTION d_ubig;
+DROP FUNCTION d_double;
+DROP FUNCTION d_float;
+DROP FUNCTION d_dec;
+DROP FUNCTION d_year;
+DROP FUNCTION d_bit;
+DROP FUNCTION d_date;
+DROP FUNCTION d_time;
+DROP FUNCTION d_datetime;
+DROP FUNCTION d_text;
+DROP FUNCTION d_latin1;
+DROP FUNCTION d_longtext;
+DROP FUNCTION d_bin;
+DROP FUNCTION d_blob;
+DROP FUNCTION d_vector;
+DROP FUNCTION d_json;
+DROP FUNCTION d_uuid;
+DROP FUNCTION d_inet6;
+DROP FUNCTION d_enum;
+DROP FUNCTION r_int;
+DROP FUNCTION r_int_lax;
+DROP FUNCTION r_ubig;
+DROP FUNCTION r_big;
+DROP FUNCTION r_double;
+DROP FUNCTION r_dec;
+DROP FUNCTION r_dec2;
+DROP FUNCTION r_text;
+DROP FUNCTION r_latin1;
+DROP FUNCTION r_date;
+DROP FUNCTION r_datetime;
+DROP FUNCTION r_bin;
+DROP FUNCTION r_vector;
+DROP FUNCTION r_vector2;
+DROP FUNCTION r_json;
+DROP FUNCTION r_none;

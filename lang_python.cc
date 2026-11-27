@@ -34,6 +34,7 @@
 #include "lang_python.h"
 #include "py_inhost_module.h"
 #include "py_func_catalog.h"
+#include "lang_routine.h"
 
 /* -------------------------------------------------------------------------
    State
@@ -339,6 +340,14 @@ int lang_python_init(void * /* unused */)
     return 1;
   }
 
+  if (lang_routine_init())
+  {
+    release_names();
+    sql_print_error("lang_python: failed to prepare the routine language");
+    Py_Finalize();
+    return 1;
+  }
+
   numpy_available= true;
 
   sql_print_information("lang_python: Python %d.%d initialised, numpy available",
@@ -377,6 +386,7 @@ int lang_python_deinit(void * /* unused */)
   }
 
   numpy_available= false;
+  lang_routine_deinit();
   release_names();
   Py_Finalize();
   return 0;

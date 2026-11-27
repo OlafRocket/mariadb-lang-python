@@ -21,13 +21,15 @@
   the daemon plugin (init/deinit, system variables) and the function
   plugins (py_eval, py_exec, and the Phase 1.5 named-function surface:
   py_create_function, py_replace_function, py_drop_function, py_call;
-  and the Phase 2 aggregate py_agg).
+  and the Phase 2 aggregate py_agg), and the language plugin PYTHON
+  (CREATE FUNCTION ... LANGUAGE PYTHON, see lang_routine.h).
 */
 
 #include "item_func_python.h"
 #include "item_func_py_named.h"
 #include "item_sum_py_agg.h"
 #include "lang_python.h"
+#include "lang_routine.h"
 
 
 /* -------------------------------------------------------------------------
@@ -153,6 +155,18 @@ maria_declare_plugin(lang_python)
   "Olaf Razzoli",
   "py_agg(name, cols...) - aggregate: pass each group to a named Python "
   "function or aggregate as numpy arrays",
+  PLUGIN_LICENSE_GPL,
+  NULL, NULL, 0x0007, NULL, NULL, "0.7",
+  MariaDB_PLUGIN_MATURITY_EXPERIMENTAL
+},
+{
+  /* The name of the plugin is the name of the language: LANGUAGE PYTHON.
+     The interpreter belongs to the daemon plugin above. */
+  MariaDB_LANGUAGE_PLUGIN,
+  &lang_python_language,
+  "PYTHON",
+  "Olaf Razzoli",
+  "Routine language PYTHON: stored functions and procedures in Python",
   PLUGIN_LICENSE_GPL,
   NULL, NULL, 0x0007, NULL, NULL, "0.7",
   MariaDB_PLUGIN_MATURITY_EXPERIMENTAL

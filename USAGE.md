@@ -13,6 +13,11 @@ bundled Python 3.14 interpreter and numpy.  Requires MariaDB 13.3 or later
 | `py_agg(name, cols...)` | Aggregate: pass each group to a named function or aggregate as numpy arrays |
 | `py_create_aggregate`, `py_replace_aggregate` | Manage named Python aggregates (a class with `step` / `finalize`) |
 
+Stored functions and procedures in Python are created with
+`CREATE FUNCTION ... LANGUAGE PYTHON` and
+`CREATE PROCEDURE ... LANGUAGE PYTHON`: see
+[Routines in the language PYTHON](#routines-in-the-language-python).
+
 Inside Python, the built-in `inhost` module gives access to the hosting
 server: `inhost.sql.query()`, `inhost.sql.query_sets()`,
 `inhost.sql.execute()` and
@@ -527,6 +532,139 @@ inside the Python code as `args[0]`, `args[1]`, etc.
 | `BOOL` | `BOOLEAN` | `int` |
 
 The type keyword is case-insensitive.
+
+## Routines in the language PYTHON
+
+Stored functions and procedures whose body is Python.  They are created
+with the DDL of stored routines, stored in `mysql.proc`, called by
+name, replicated and dumped as routines in SQL are.
+
+```sql
+CREATE FUNCTION multiply(x INT, y INT) RETURNS INT
+  LANGUAGE PYTHON DETERMINISTIC NO SQL AS $$
+    return x * y
+$$;
+SELECT multiply(3, 4);                       -- 12
+SELECT multiply(price, quantity) FROM orders;
+
+CREATE PROCEDURE split_name(IN full VARCHAR(100), OUT first VARCHAR(100),
+                            OUT rest VARCHAR(100))
+  LANGUAGE PYTHON AS $$
+    first, _, rest = full.partition(' ')
+$$;
+CALL split_name('Ada Lovelace', @first, @rest);
+
+DROP FUNCTION multiply;
+DROP PROCEDURE split_name;
+```
+
+Requirement: a server with the language plugin type
+(`MariaDB_LANGUAGE_PLUGIN`).  The library registers the language plugin
+`PYTHON` beside the function plugins; `INSTALL SONAME 'lang_python'`
+loads all of them.
+
+```sql
+SELECT PLUGIN_NAME, PLUGIN_TYPE FROM information_schema.PLUGINS
+  WHERE PLUGIN_NAME = 'PYTHON';              -- PYTHON, LANGUAGE
+```
+
+### Body
+
+| Topic | Rule |
+|---|---|
+| Form | The body of a Python function.  The parameters are the SQL parameters, by name, in the spelling of the declaration |
+| Quoting | A dollar-quoted string (`$$ ... $$`, `$tag$ ... $tag$`) or a string literal.  A dollar-quoted body needs no escaping |
+| Indentation | The common leading whitespace of the body is removed before it is compiled, so a body can be indented to match the SQL.  The lines of a string that spans lines lose the same indentation |
+| Function result | `return value`.  A body that ends without `return`, and `return` without a value, give NULL |
+| OUT and INOUT parameters | Assigned by name.  The caller receives what the name holds when the body ends, also after `return`.  An OUT parameter starts as `None` |
+| `return` in a procedure | Without a value only.  `return` with a value is an error at `CREATE` |
+| Not allowed | `yield` and `await` in the body itself; they are allowed in functions defined inside the body |
+| Parameter names | A Python identifier that is not a keyword.  Other names are refused at `CREATE` |
+| NULL | A NULL argument is `None`.  Arithmetic with `None` raises an exception; the body tests for it |
+
+### Values
+
+SQL to Python (arguments):
+
+| SQL type | Python |
+|---|---|
+| NULL | `None` |
+| Integer types, BOOLEAN, YEAR, BIT | `int` |
+| FLOAT, DOUBLE | `float` |
+| DECIMAL | `decimal.Decimal` |
+| CHAR, VARCHAR, TEXT, ENUM, JSON, UUID, INET6 | `str` |
+| BINARY, VARBINARY, BLOB | `bytes` |
+| VECTOR | `numpy.ndarray` of `float32`; `bytes` with `lang_python_vector_numpy = OFF` |
+| DATE, TIME, DATETIME, TIMESTAMP | `str` |
+
+Python to SQL (function result, OUT and INOUT parameters):
+
+| Python | Stored as |
+|---|---|
+| `None` | NULL |
+| `bool`, `int` | Integer; an `int` beyond 64 bits as its digits |
+| `float` | Double.  NaN and the infinities are an error |
+| `decimal.Decimal` | Its digits |
+| `str` | Text |
+| `bytes`, `bytearray`, `memoryview`, `numpy.ndarray` | Bytes |
+| `dict`, `list`, `tuple`, `set`, functions, classes, generators | An error.  JSON is returned as text: `return json.dumps(value)` |
+| Any other object | `str(object)`; for example `datetime.date` into a DATE |
+
+The server converts the stored value to the declared type under the
+`sql_mode` the routine was created with: in strict mode a value that
+does not fit is an error, otherwise a warning.
+
+### Errors
+
+| Case | Result |
+|---|---|
+| The body does not compile | `CREATE` fails with `ER_PARSE_ERROR` |
+| A Python exception at the call | The statement fails with `ER_UNKNOWN_ERROR` |
+| A value without an SQL form | The statement fails with `ER_UNKNOWN_ERROR` |
+
+Message form, with the line of the body as written:
+
+```
+Python: <schema>.<name>: <Exception>: <message> at line <N>
+```
+
+`lang_python_strict_errors` is not read for routines.  To continue after
+an error, the body catches the exception, or a calling routine in SQL
+declares a handler (`DECLARE CONTINUE HANDLER FOR SQLEXCEPTION`).
+
+### Namespace
+
+| Object | Lifetime and scope |
+|---|---|
+| Compiled code of a routine | Shared by all sessions |
+| Namespace of a routine (its globals) | One per session and routine.  Created at the first call in the session, released when the session ends or the routine is replaced or dropped |
+| Local variables of the body | One call |
+| Imported modules (`sys.modules`) | The interpreter: shared by all sessions and all routines |
+
+A body keeps state between the calls of one session with `global`:
+
+```sql
+CREATE FUNCTION counter() RETURNS INT LANGUAGE PYTHON AS $$
+    global calls
+    calls = globals().get('calls', 0) + 1
+    return calls
+$$;
+SELECT counter(), counter();                 -- 1, 2
+```
+
+### Differences from py_call
+
+| Topic | `py_call` | Routine in the language PYTHON |
+|---|---|---|
+| Definition | `py_create_function(...)`, table `mysql.lang_python_func` | `CREATE FUNCTION`, `CREATE PROCEDURE`, table `mysql.proc` |
+| Call | `py_call('name', ...)` | `name(...)`, `CALL name(...)` |
+| Body | Module-level code that assigns `result` | Function body with `return` |
+| Types | Six return types; arguments by the type of the expression | Any SQL type for parameters and result, converted by the server |
+| Error mode | `strict_errors`, frozen at create time | Always an error |
+| Namespace | New for every call | One per session and routine |
+| Privileges, replication, dump | None | Those of stored routines |
+
+Limits: [LIMITATIONS.md](LIMITATIONS.md#routines-in-the-language-python).
 
 ## Type mapping
 

@@ -1,0 +1,186 @@
+--echo #
+--echo # lang_python: stored functions in the language PYTHON
+--echo #
+--source include/count_sessions.inc
+
+SELECT PLUGIN_NAME, PLUGIN_TYPE, PLUGIN_STATUS
+  FROM INFORMATION_SCHEMA.PLUGINS WHERE PLUGIN_NAME = 'PYTHON';
+
+--echo # The body is the body of a function. The parameters are the SQL
+--echo # parameters; return gives the result
+
+CREATE FUNCTION f1(x INT, y INT) RETURNS INT LANGUAGE PYTHON AS $$ return x * y $$;
+SELECT f1(6, 7), f1(-3, 1), f1(0, 5);
+
+--echo # A NULL argument is None
+CREATE FUNCTION f2(x INT) RETURNS VARCHAR(20) LANGUAGE PYTHON AS
+$$ return 'none' if x is None else 'value' $$;
+SELECT f2(NULL), f2(1);
+
+--echo # A body indented to match the SQL, with a nested function, an
+--echo # import and a condition. The name of the language ignores case
+CREATE FUNCTION f3(a VARCHAR(20), b VARCHAR(20)) RETURNS VARCHAR(50)
+  LANGUAGE python DETERMINISTIC NO SQL AS $$
+    import math
+
+    def shout(s):
+        return s.upper()
+
+    if len(a) > 3:
+        sep = ' -- '
+    else:
+        sep = '; '
+    return shout(a) + sep + b + ' ' + str(math.gcd(12, 18))
+$$;
+SELECT f3('ab', 'cd'), f3('abcd', "it's");
+
+--echo # A body that starts at the first column
+CREATE FUNCTION f4(n INT) RETURNS INT LANGUAGE PYTHON AS $$
+total = 0
+for i in range(n + 1):
+    total += i
+return total
+$$;
+SELECT f4(10), f4(100);
+
+--echo # A body without return, a return without a value, and an empty
+--echo # body give NULL
+CREATE FUNCTION f5() RETURNS INT LANGUAGE PYTHON AS $$ x = 1 $$;
+CREATE FUNCTION f6(n INT) RETURNS INT LANGUAGE PYTHON AS $$
+  if n > 0:
+      return
+  return n
+$$;
+CREATE FUNCTION f7() RETURNS INT LANGUAGE PYTHON AS $$ $$;
+SELECT f5(), f6(1), f6(-1), f7();
+
+--echo # The body as a string literal
+CREATE FUNCTION f8(n INT) RETURNS INT LANGUAGE PYTHON AS 'return n + 1';
+SELECT f8(41);
+
+--echo # A parameter is used in the spelling of its declaration
+CREATE FUNCTION f9(Total INT, `rate_` DOUBLE) RETURNS DOUBLE
+  LANGUAGE PYTHON AS $$ return Total * rate_ $$;
+SELECT f9(10, 0.5);
+
+--echo # The common indentation is removed from the whole body, also from
+--echo # the lines of a string that spans lines
+CREATE FUNCTION f10() RETURNS VARCHAR(100) LANGUAGE PYTHON AS $$
+    text = """first
+      second
+    third"""
+    return text.replace('\n', '|')
+$$;
+SELECT f10();
+
+--echo # The definition in the catalog
+--vertical_results
+SHOW CREATE FUNCTION f3;
+SELECT ROUTINE_NAME, ROUTINE_BODY, EXTERNAL_LANGUAGE, IS_DETERMINISTIC,
+       SQL_DATA_ACCESS, ROUTINE_DEFINITION
+  FROM INFORMATION_SCHEMA.ROUTINES
+  WHERE ROUTINE_SCHEMA = 'test' AND ROUTINE_NAME IN ('f1', 'f3');
+--horizontal_results
+SELECT name, language, HEX(body) FROM mysql.proc WHERE name = 'f1';
+
+--echo #
+--echo # In statements
+--echo #
+
+CREATE TABLE t1 (a INT, b VARCHAR(20));
+INSERT INTO t1 VALUES (1, 'one'), (2, 'two'), (3, NULL), (4, 'four');
+SELECT a, f1(a, 10), f2(a), f3(b, 'x') FROM t1 WHERE b IS NOT NULL ORDER BY a;
+SELECT a FROM t1 WHERE f1(a, a) > 5 ORDER BY f1(a, -1);
+SELECT SUM(f1(a, 2)), MAX(f4(a)) FROM t1;
+UPDATE t1 SET a = f1(a, 100) WHERE f4(a) = 3;
+SELECT a FROM t1 ORDER BY a;
+CREATE VIEW v1 AS SELECT a, f1(a, 2) AS twice FROM t1;
+SELECT * FROM v1 ORDER BY a;
+PREPARE s FROM 'SELECT f1(?, ?)';
+SET @a = 8, @b = 9;
+EXECUTE s USING @a, @b;
+EXECUTE s USING @b, @b;
+DEALLOCATE PREPARE s;
+DROP VIEW v1;
+DROP TABLE t1;
+
+--echo # Called from a routine in SQL
+DELIMITER |;
+CREATE FUNCTION sql_f(n INT) RETURNS INT
+BEGIN
+  DECLARE r INT DEFAULT 0;
+  SET r = f1(n, n) + f4(n);
+  RETURN r;
+END|
+DELIMITER ;|
+SELECT sql_f(4);
+DROP FUNCTION sql_f;
+
+--echo #
+--echo # The namespace: one per session and routine
+--echo #
+
+CREATE FUNCTION counter() RETURNS INT LANGUAGE PYTHON AS $$
+    global calls
+    calls = globals().get('calls', 0) + 1
+    return calls
+$$;
+CREATE FUNCTION counter2() RETURNS INT LANGUAGE PYTHON AS $$
+    return globals().get('calls', -1)
+$$;
+SELECT counter(), counter(), counter();
+SELECT counter();
+--echo # Another routine of the session does not see it
+SELECT counter2();
+
+--echo # Another session starts with its own. It compiles the routine
+--echo # when it loads it
+connect (con2, localhost, root,,);
+SELECT counter(), f1(2, 3), f3('x', 'y');
+disconnect con2;
+connection default;
+SELECT counter();
+
+--echo # Modules are those of the interpreter, shared by the sessions:
+--echo # the namespace of the routine is not
+CREATE FUNCTION namespace_names() RETURNS VARCHAR(200) LANGUAGE PYTHON AS $$
+    return ','.join(sorted(n for n in globals() if not n.startswith('__mariadb')))
+$$;
+SELECT namespace_names();
+
+--echo #
+--echo # CREATE OR REPLACE, IF NOT EXISTS, DROP
+--echo #
+
+CREATE OR REPLACE FUNCTION f1(x INT, y INT) RETURNS INT LANGUAGE PYTHON AS
+$$ return x + y $$;
+SELECT f1(6, 7);
+CREATE FUNCTION IF NOT EXISTS f1(x INT, y INT) RETURNS INT LANGUAGE PYTHON AS
+$$ return 0 $$;
+SELECT f1(6, 7);
+--echo # A replaced function starts with a new namespace
+CREATE OR REPLACE FUNCTION counter() RETURNS INT LANGUAGE PYTHON AS $$
+    global calls
+    calls = globals().get('calls', 100) + 1
+    return calls
+$$;
+SELECT counter();
+
+--echo # The functions of the plugin are available beside the routines
+SELECT py_eval('args[0] + 1', 'INT', f1(1, 2));
+
+DROP FUNCTION f1;
+DROP FUNCTION f2;
+DROP FUNCTION f3;
+DROP FUNCTION f4;
+DROP FUNCTION f5;
+DROP FUNCTION f6;
+DROP FUNCTION f7;
+DROP FUNCTION f8;
+DROP FUNCTION f9;
+DROP FUNCTION f10;
+DROP FUNCTION counter;
+DROP FUNCTION counter2;
+DROP FUNCTION namespace_names;
+
+--source include/wait_until_count_sessions.inc
