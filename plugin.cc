@@ -50,10 +50,10 @@ maria_declare_plugin(lang_python)
   PLUGIN_LICENSE_GPL,
   lang_python_init,
   lang_python_deinit,
-  0x0006,
+  0x0007,
   NULL,                      /* status variables */
   lang_python_sys_vars(),    /* system variables */
-  "0.6",
+  "0.7",
   MariaDB_PLUGIN_MATURITY_EXPERIMENTAL
 },
 {
@@ -65,8 +65,8 @@ maria_declare_plugin(lang_python)
   PLUGIN_LICENSE_GPL,
   NULL,                      /* init handled by lang_python daemon plugin */
   NULL,                      /* deinit handled by lang_python daemon plugin */
-  0x0006,
-  NULL, NULL, "0.6",
+  0x0007,
+  NULL, NULL, "0.7",
   MariaDB_PLUGIN_MATURITY_EXPERIMENTAL
 },
 {
@@ -78,8 +78,8 @@ maria_declare_plugin(lang_python)
   PLUGIN_LICENSE_GPL,
   NULL,                      /* init handled by lang_python daemon plugin */
   NULL,                      /* deinit handled by lang_python daemon plugin */
-  0x0006,
-  NULL, NULL, "0.6",
+  0x0007,
+  NULL, NULL, "0.7",
   MariaDB_PLUGIN_MATURITY_EXPERIMENTAL
 },
 {
@@ -90,7 +90,7 @@ maria_declare_plugin(lang_python)
   "py_create_function(name, type, params, body [, strict [, det]]) - "
   "create named Python function",
   PLUGIN_LICENSE_GPL,
-  NULL, NULL, 0x0006, NULL, NULL, "0.6",
+  NULL, NULL, 0x0007, NULL, NULL, "0.7",
   MariaDB_PLUGIN_MATURITY_EXPERIMENTAL
 },
 {
@@ -101,7 +101,7 @@ maria_declare_plugin(lang_python)
   "py_replace_function(name, type, params, body [, strict [, det]]) - "
   "create or replace named Python function",
   PLUGIN_LICENSE_GPL,
-  NULL, NULL, 0x0006, NULL, NULL, "0.6",
+  NULL, NULL, 0x0007, NULL, NULL, "0.7",
   MariaDB_PLUGIN_MATURITY_EXPERIMENTAL
 },
 {
@@ -111,7 +111,7 @@ maria_declare_plugin(lang_python)
   "Olaf Razzoli",
   "py_drop_function(name [, if_exists]) - drop named Python function",
   PLUGIN_LICENSE_GPL,
-  NULL, NULL, 0x0006, NULL, NULL, "0.6",
+  NULL, NULL, 0x0007, NULL, NULL, "0.7",
   MariaDB_PLUGIN_MATURITY_EXPERIMENTAL
 },
 {
@@ -121,7 +121,7 @@ maria_declare_plugin(lang_python)
   "Olaf Razzoli",
   "py_call(name [, args...]) - invoke named Python function",
   PLUGIN_LICENSE_GPL,
-  NULL, NULL, 0x0006, NULL, NULL, "0.6",
+  NULL, NULL, 0x0007, NULL, NULL, "0.7",
   MariaDB_PLUGIN_MATURITY_EXPERIMENTAL
 },
 {
@@ -132,7 +132,7 @@ maria_declare_plugin(lang_python)
   "py_create_aggregate(name, type, params, body [, strict]) - "
   "create named Python aggregate (class Aggregate: step/finalize)",
   PLUGIN_LICENSE_GPL,
-  NULL, NULL, 0x0006, NULL, NULL, "0.6",
+  NULL, NULL, 0x0007, NULL, NULL, "0.7",
   MariaDB_PLUGIN_MATURITY_EXPERIMENTAL
 },
 {
@@ -143,7 +143,7 @@ maria_declare_plugin(lang_python)
   "py_replace_aggregate(name, type, params, body [, strict]) - "
   "create or replace named Python aggregate",
   PLUGIN_LICENSE_GPL,
-  NULL, NULL, 0x0006, NULL, NULL, "0.6",
+  NULL, NULL, 0x0007, NULL, NULL, "0.7",
   MariaDB_PLUGIN_MATURITY_EXPERIMENTAL
 },
 {
@@ -154,7 +154,7 @@ maria_declare_plugin(lang_python)
   "py_agg(name, cols...) - aggregate: pass each group to a named Python "
   "function or aggregate as numpy arrays",
   PLUGIN_LICENSE_GPL,
-  NULL, NULL, 0x0006, NULL, NULL, "0.6",
+  NULL, NULL, 0x0007, NULL, NULL, "0.7",
   MariaDB_PLUGIN_MATURITY_EXPERIMENTAL
 }
 maria_declare_plugin_end;
