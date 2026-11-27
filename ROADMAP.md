@@ -21,8 +21,8 @@ rejected.
 | 2 | Can Python work on whole groups of rows as columnar arrays (aggregates, window functions, bulk reads)? | Done |
 | 3 | What does a Python call cost per row, and how far can it be reduced? | In progress |
 | 4 | Can Python calls of concurrent connections run in parallel? | Planned |
-| 5 | `CREATE FUNCTION ... LANGUAGE PYTHON` | Later, needs server changes |
-| 6 | `CREATE PROCEDURE ... LANGUAGE PYTHON`, table-valued functions | Later, needs server changes |
+| 5 | `CREATE FUNCTION ... LANGUAGE PYTHON` | Done, on the server branch |
+| 6 | `CREATE PROCEDURE ... LANGUAGE PYTHON`, SQL on the calling session, table-valued functions | In progress: procedures done, on the server branch |
 | 7 | Triggers and events in Python | Later, needs server changes |
 
 The phases form two bands:
@@ -30,7 +30,7 @@ The phases form two bands:
 | Band | Phases | Constraint |
 |---|---|---|
 | Plugin only | 1 to 4 | No SQL grammar changes and no edits to server code outside the plugin. Everything uses the embedded interpreter and the plugin APIs of an unmodified server. |
-| Server core | 5 to 7 | Requires changes to the MariaDB grammar or core. Deferred until the plugin-only band is complete. |
+| Server core | 5 to 7 | Requires changes to the MariaDB grammar or core. The changes are developed on a server branch (see [Server target](#server-target)). |
 
 The plugin-only band comes first on purpose: it measures how much is
 possible with the extension points the server already offers, and it
@@ -38,10 +38,20 @@ identifies precisely which features need a server change and why.
 
 ## Server target
 
-Development tracks MariaDB `main` (13.3) at a pinned commit. The pin and
-the procedure for moving it are in [BUILD.md](BUILD.md). The 13.3
-requirement comes from native aggregate function plugins (MDEV-40672),
-which Phase 2 uses.
+Development tracks the branch `lang-ext` of the server fork
+[OlafRocket/server](https://github.com/OlafRocket/server/tree/lang-ext)
+at a pinned commit. The pin and the procedure for moving it are in
+[BUILD.md](BUILD.md).
+
+| Layer | Content | Used by |
+|---|---|---|
+| MariaDB `main` (13.3) | Native aggregate function plugins (MDEV-40672) | Phase 2 |
+| Branch `lang-ext` | Plugin type `MariaDB_LANGUAGE_PLUGIN` (`include/mysql/plugin_language.h`); dollar-quoted string literals; `CREATE FUNCTION / PROCEDURE ... LANGUAGE lang AS body`, with the language in `mysql.proc`, binary logging, replication and dump | Phases 5 and 6 |
+
+The branch does not name Python. A language plugin registers a language
+under its plugin name; the server parses the routine header, stores the
+body as text and passes it to the plugin. lang_python registers the
+language `PYTHON`.
 
 ## Plugin-only band
 
@@ -310,29 +320,81 @@ have static names as well, so `py_agg('name', ...)` has the same shape.
 ## Server-core band
 
 Everything in this band requires changes to the MariaDB grammar or core.
-It is delivered as server patches or through an upstream contribution;
-the form is decided when the band starts.
+The changes are on the server branch `lang-ext` (see
+[Server target](#server-target)) and are general: they add a language
+plugin type, not Python. An upstream contribution is prepared from that
+branch.
 
-### Phase 5: `CREATE FUNCTION ... LANGUAGE PYTHON`
+### Phase 5: `CREATE FUNCTION ... LANGUAGE PYTHON` (done)
 
-A SQL grammar layer over the catalog of Phase 1.5.
+Question: can a function written in Python be a stored function of the
+server, created with DDL and called by its name?
 
 ```sql
-CREATE FUNCTION multiply(x INT, y INT) RETURNS INT LANGUAGE PYTHON AS
-  return x * y;
+CREATE FUNCTION multiply(x INT, y INT) RETURNS INT
+  LANGUAGE PYTHON AS $$ return x * y $$;
+
+SELECT multiply(3, 4);
 ```
 
-- The parser writes to the catalog that Phase 1.5 introduced.
-- Functions compile once and are called by name: `SELECT multiply(3, 4)`.
-- Parameters are declared with SQL types.
-- The body is a delimited block, not a string literal (see
+- The routine is a stored routine of the server: it is kept in
+  `mysql.proc`, has a definer, privileges and `SQL SECURITY`, and is
+  shown by `SHOW CREATE FUNCTION` and `INFORMATION_SCHEMA.ROUTINES`.
+- The body is the body of a Python function whose parameters are the
+  SQL parameters. It is delivered in a dollar-quoted string (see
   [Code delivery](#code-delivery)).
+- Parameters are declared with SQL types. The server converts the
+  arguments to the declared types and the result to the return type,
+  under the `sql_mode` of the routine.
+- The body is compiled once. The compiled code is shared by the
+  sessions; each session has its own namespace per routine.
+- A Python exception is an SQL error with the routine name and the line
+  of the body.
+- The routines are written to the binary log, replicated and dumped as
+  routines in SQL are.
 
-### Phase 6: `CREATE PROCEDURE ... LANGUAGE PYTHON`
+Result: direct name dispatch works through the stored routine layer, as
+the [finding](#finding-direct-name-dispatch-needs-the-parser) of the
+plugin-only band predicted.
 
-Procedures that call back into SQL.
+Rejected alternative: a grammar layer over the catalog of Phase 1.5
+(`mysql.lang_python_func`). The routine layer of the server already
+provides storage, privileges, the routine cache, replication and dump;
+a second catalog would repeat them. `py_create_function` and `py_call`
+remain as the form for an unmodified server.
 
-- Python executes SQL statements on the caller's session.
+Open:
+
+- Default values of parameters are not applied.
+- `KILL` and `max_statement_time` do not stop a running body.
+- The Python thread state is created per call, so the cost per row is
+  higher than that of `py_call`.
+- Aggregate functions (`CREATE AGGREGATE FUNCTION ... LANGUAGE PYTHON`)
+  are refused; `py_agg` is the aggregate form.
+
+Details: [LIMITATIONS.md](LIMITATIONS.md).
+
+### Phase 6: `CREATE PROCEDURE ... LANGUAGE PYTHON` (in progress)
+
+Question: can a procedure written in Python take part in the session
+that calls it?
+
+```sql
+CREATE PROCEDURE next_value(IN a INT, OUT b INT)
+  LANGUAGE PYTHON AS $$ b = a + 1 $$;
+```
+
+Done:
+
+- Procedures with `IN`, `OUT` and `INOUT` parameters. `OUT` and `INOUT`
+  parameters are copied out when the body ends, also after a `return`.
+
+Open:
+
+- SQL statements from Python on the session of the caller. `inhost.sql`
+  can be imported in a body, but it runs in an internal session: without
+  privilege checks, outside the transaction of the caller and outside
+  the binary log.
 - `COMMIT` and `ROLLBACK` from Python; SQL that is atomic with the
   calling statement.
 - Result sets returned to the client.
@@ -353,4 +415,4 @@ problems.
 | Problem | Status |
 |---|---|
 | Indentation. Python is whitespace-sensitive; code indented to match the surrounding SQL raises `IndentationError`. | Solved in Phase 1. The body is dedented before compilation with CPython's `textwrap.dedent` (`dedent_source()` in `item_func_python.cc`). Only the shared leading whitespace is removed, so nested indentation is preserved. |
-| Escaping. Quotes in the code collide with the SQL string delimiter. MariaDB has no dollar quoting or heredoc. | Not solved while the body is a string literal. Named functions do not change it. The fix is a delimited body, read as raw text up to a delimiter like a stored routine body, in the grammar of Phase 5. Mitigations are listed in [USAGE.md](USAGE.md). Possible additions before Phase 5: a variant that reads the body from a `.py` file, and a base64-encoded body for programmatic callers. |
+| Escaping. Quotes in the code collide with the SQL string delimiter. An unmodified MariaDB has no dollar quoting or heredoc. | Solved on the server branch: a dollar-quoted string (`$$text$$`, `$tag$text$tag$`) is taken as it is, with no escape processing, and is accepted wherever a string literal is. It delivers the body of a routine and can deliver the code argument of the `py_*` functions. On an unmodified server the mitigations in [USAGE.md](USAGE.md) apply. |

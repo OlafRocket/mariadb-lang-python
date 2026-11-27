@@ -21,7 +21,7 @@
 #   full-image: base-image + lang_python plugin (default target)
 #
 # Run from the root of the lang_python repo: the builder stage clones
-# the MariaDB server tree itself (pinned via MARIADB_REF) and grafts
+# the server tree itself (MARIADB_REPO, pinned via MARIADB_REF) and grafts
 # this repo in as plugin/lang_python, so the build context is just the
 # plugin sources.
 #
@@ -36,8 +36,9 @@
 #   podman build -t mariadb-langpython-base --target base-image .
 #   podman build -t mariadb-langpython .          # near-instant
 #
-# Build against a different MariaDB version (branch, tag, or commit SHA):
-#   podman build --build-arg MARIADB_REF=main ...
+# Build against a different server version (branch, tag, or commit SHA
+# of MARIADB_REPO):
+#   podman build --build-arg MARIADB_REF=lang-ext ...
 #
 # Skip the strip step (keep build-time files for debugging):
 #   podman build --build-arg STRIP=false ...
@@ -83,11 +84,13 @@ RUN dnf -y install epel-release && \
 # submodules this build needs are initialized.  This is its own layer:
 # plugin-only edits below never re-download the server tree.
 # Default = the version the plugin is currently tested against: a
-# commit on MariaDB main (13.3).  This line is the only record of the
-# pin; BUILD.md and docs/ read it from here.
-ARG MARIADB_REF=392818112aa1738005b977c21387d272b4287842
+# commit on the branch lang-ext of the server fork, which is MariaDB
+# main (13.3) plus the language plugin interface.  These two lines are
+# the only record of the pin; BUILD.md and docs/ read it from here.
+ARG MARIADB_REPO=https://github.com/OlafRocket/server.git
+ARG MARIADB_REF=beaa7f4c932886881a92c2528e535f11abc00510
 RUN git init -q /src && cd /src && \
-    git remote add origin https://github.com/MariaDB/server.git && \
+    git remote add origin ${MARIADB_REPO} && \
     git fetch -q --depth 1 origin ${MARIADB_REF} && \
     git checkout -q FETCH_HEAD && \
     git submodule update --init --depth 1 libmariadb wsrep-lib

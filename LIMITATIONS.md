@@ -76,10 +76,11 @@ their own sections below.
   In-process DB access below.  SQL atomic with the outer statement is
   addressed by Phase 6.
 
-- **No SQL DDL for functions.**  Named functions are created with
+- **No SQL DDL for named functions.**  Named functions are created with
   `py_create_function` (Phase 1.5) and called through `py_call('name', ...)`.
   `SELECT name(...)` and `CREATE FUNCTION ... LANGUAGE PYTHON` are
-  addressed by Phase 5.
+  provided by the routine language (Phase 5), see
+  [Routines in the language PYTHON](#routines-in-the-language-python).
 
 - **Limited, fixed return types**: INT, DOUBLE, VARCHAR, BLOB, DECIMAL, BOOL.
   The return type must be a compile-time string constant (`args[1]` must
@@ -94,12 +95,12 @@ their own sections below.
 
 ## Code delivery
 
-- **Escaping is not fully solvable while the body is a SQL string literal**
-  (quotes/backslashes collide with SQL syntax; MariaDB has no dollar-quoting
-  or heredoc).  Only mitigations exist: parameter binding, quote
-  choice, `NO_BACKSLASH_ESCAPES`, base64 (see the Escaping section in
-  [USAGE.md](USAGE.md)).  A structural fix comes only with a delimited DDL
-  body in Phase 5.  Indentation, by contrast, is solved via auto-dedent.
+- **Escaping is not fully solvable while the body is a quoted SQL string
+  literal** (quotes/backslashes collide with SQL syntax).  Mitigations:
+  parameter binding, quote choice, `NO_BACKSLASH_ESCAPES`, base64 (see
+  the Escaping section in [USAGE.md](USAGE.md)).  The structural fix is
+  the dollar-quoted string of the server branch (`$$text$$`), which is
+  taken as it is.  Indentation is solved via auto-dedent.
 
 ## Named functions (Phase 1.5)
 

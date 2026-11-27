@@ -7,8 +7,9 @@ It is a research and development project. The question it investigates:
 how far can an embedded language be taken beyond the classic stored
 procedure and stored function?
 
-Status: experimental. It requires MariaDB `main` (13.3, alpha) and is
-not intended for production use. See [LIMITATIONS.md](LIMITATIONS.md).
+Status: experimental. It requires a MariaDB server branch based on
+`main` (13.3, alpha), see [Requirements](#requirements), and is not
+intended for production use. See [LIMITATIONS.md](LIMITATIONS.md).
 
 ## Research scope
 
@@ -27,11 +28,14 @@ once per statement. This project explores the uses outside that shape.
 | Numerical and ML workloads | Can VECTOR columns and bulk numeric data reach numpy without a Python object per cell? | VECTOR as `float32` arrays; binary column buffers filled with the GIL released |
 | Cost | What does a Python call cost per row? | About 10 µs per row for a scalar call against 0.13 µs for native SQL; measured with the harness in [bench/](bench/README.md) |
 | Parallelism | Can Python calls of concurrent connections run in parallel? | Planned: free-threaded CPython |
-| Language integration | `CREATE FUNCTION / PROCEDURE / TRIGGER ... LANGUAGE PYTHON` | Later: needs server grammar changes |
+| Language integration | Can a stored routine be written in Python and called by its name? | `CREATE FUNCTION / PROCEDURE ... LANGUAGE PYTHON AS $$ ... $$`, on a server branch that adds a language plugin type. Triggers: later |
 
 The first phases are restricted to an unmodified server on purpose:
 they measure how much the existing plugin interfaces allow, and they
-identify which features need a server change and why. The questions,
+identify which features need a server change and why. The language
+integration needs such a change: the plugin type
+`MariaDB_LANGUAGE_PLUGIN`, developed on the branch `lang-ext` of
+[OlafRocket/server](https://github.com/OlafRocket/server/tree/lang-ext). The questions,
 results and rejected alternatives per phase are in
 [ROADMAP.md](ROADMAP.md).
 
@@ -127,7 +131,7 @@ Reference: [USAGE.md](USAGE.md).
 
 | Item | Requirement |
 |---|---|
-| Server | MariaDB `main` (13.3) at the commit pinned in the [Containerfile](Containerfile). The plugin uses native aggregate function plugins (MDEV-40672) and internal server classes; it is built for one exact server version. |
+| Server | The branch `lang-ext` of [OlafRocket/server](https://github.com/OlafRocket/server/tree/lang-ext), at the commit pinned in the [Containerfile](Containerfile): MariaDB `main` (13.3) plus the language plugin interface. The plugin uses native aggregate function plugins (MDEV-40672), the language plugin type and internal server classes; it is built for one exact server version. |
 | Python | CPython 3.14 and numpy, downloaded and built by the plugin's CMake. No system Python is used. |
 | Platform | Linux |
 

@@ -3,13 +3,22 @@
 ## Repo layout
 
 This repo holds only the plugin. It is developed and tested against
-MariaDB `main` (13.3, alpha) at a pinned commit. The pin is the
-`ARG MARIADB_REF=` default in the [Containerfile](Containerfile), the
-only place the commit hash is recorded.
+the branch `lang-ext` of the server fork
+[OlafRocket/server](https://github.com/OlafRocket/server/tree/lang-ext)
+at a pinned commit. The branch is MariaDB `main` (13.3, alpha) plus the
+language plugin interface: the plugin type `MariaDB_LANGUAGE_PLUGIN`,
+dollar-quoted strings and `CREATE FUNCTION / PROCEDURE ... LANGUAGE`.
+The pin is the `ARG MARIADB_REPO=` and `ARG MARIADB_REF=` defaults in
+the [Containerfile](Containerfile), the only place the commit hash is
+recorded.
+
+The routine language `PYTHON` needs the branch. An unmodified MariaDB
+`main` does not have `mysql/plugin_language.h`, and the plugin does not
+compile against it.
 
 The 13.3 requirement comes from native aggregate function plugins
 (MDEV-40672), the registration route of Phase 2 (see
-[ROADMAP.md](ROADMAP.md)). The pin follows `main` closely; see
+[ROADMAP.md](ROADMAP.md)). The branch follows `main` closely; see
 [Moving the server pin](#moving-the-server-pin).
 
 The plugin builds in one of two ways:
@@ -17,12 +26,11 @@ The plugin builds in one of two ways:
 - **Container build** (self-contained): the Containerfile clones the
   MariaDB server tree itself and grafts this repo in as
   `plugin/lang_python` (see [Container build](#container-build)).
-- **Local build** (in a server tree): clone the server from the official
-  MariaDB GitHub repo, check out the pinned commit, then symlink this
-  repo in. MariaDB's CMake auto-discovers any `plugin/*` subdirectory:
+- **Local build** (in a server tree): clone the server fork, check out
+  the pinned commit, then symlink this repo in. MariaDB's CMake auto-discovers any `plugin/*` subdirectory:
 
   ```bash
-  git clone https://github.com/MariaDB/server.git
+  git clone https://github.com/OlafRocket/server.git
   cd server
   git checkout "$(sed -n 's/^ARG MARIADB_REF=//p' /path/to/lang_python/Containerfile)"
   git submodule update --init libmariadb wsrep-lib
@@ -36,14 +44,14 @@ The plugin builds in one of two ways:
 
 ### Moving the server pin
 
-1. In the server tree, fetch and check out the new `main` tip:
-   `git fetch origin && git checkout origin/main`, then
+1. In the server tree, fetch and check out the new tip of `lang-ext`:
+   `git fetch origin && git checkout origin/lang-ext`, then
    `git submodule update --init libmariadb wsrep-lib`.
 2. Rebuild the server and the plugin, then run the suite
    (`--suite=lang_python`).
 3. When the suite passes, set `ARG MARIADB_REF=` in the
    [Containerfile](Containerfile) to the new commit hash and commit it
-   as `build: move MariaDB pin to <short sha>`, together with any
+   as `build: move server pin to <short sha>`, together with any
    plugin fixes the new server required. When it fails, the pin stays
    until the fixes are ready.
 
@@ -242,8 +250,8 @@ image pull only the small plugin layer (~10 MB) on plugin updates.
 
 ### Build the full image (default)
 
-Run from the root of this repo.  The builder stage clones the MariaDB
-server tree itself (pinned via the `MARIADB_REF` build arg) and grafts
+Run from the root of this repo.  The builder stage clones the server
+tree itself (`MARIADB_REPO`, pinned via the `MARIADB_REF` build arg) and grafts
 this repo in as `plugin/lang_python`, so the build context is only the
 plugin sources:
 
@@ -251,10 +259,11 @@ plugin sources:
 podman build -t mariadb-langpython .
 ```
 
-To build against a different server version (branch, tag, or commit):
+To build against a different server version (branch, tag, or commit of
+`MARIADB_REPO`):
 
 ```bash
-podman build --build-arg MARIADB_REF=main -t mariadb-langpython .
+podman build --build-arg MARIADB_REF=lang-ext -t mariadb-langpython .
 ```
 
 By default the build strips build-time-only files (headers, static

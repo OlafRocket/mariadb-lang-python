@@ -13,6 +13,7 @@ layout, the development loop and the tests.
 | `item_func_python.cc`, `.h` | `py_eval`, `py_exec`; return type parsing shared by all functions |
 | `item_func_py_named.cc`, `.h` | `py_call` and the management functions (`py_create_function`, `py_replace_function`, `py_drop_function`, `py_create_aggregate`, `py_replace_aggregate`) |
 | `py_func_catalog.cc`, `.h` | Catalog table `mysql.lang_python_func` and its in-memory cache of compiled bodies |
+| `lang_routine.cc`, `.h` | Routine language `PYTHON` (`MariaDB_LANGUAGE_PLUGIN`): compiles the body of a stored function or procedure and runs it with the typed parameter fields of the server |
 | `item_sum_py_agg.cc`, `.h` | `py_agg`: native aggregate function plugin (`Item_sum_plugin`), whole-group and chunked modes |
 | `py_inhost_module.cc`, `.h` | Built-in Python module `inhost` (`inhost.sql.query`, `query_sets`, `execute`, `query_array`): parameters and Python result objects (`inhost.sql.Rows`) |
 | `py_inhost_rowsink.cc`, `.h` | Row sink that executes every `inhost.sql` statement: private THD plus a `Protocol` subclass; column buffer types shared with `py_agg` |
@@ -46,7 +47,7 @@ layout, the development loop and the tests.
 
 ## Build trees
 
-The plugin is built inside a MariaDB server tree at the pinned commit
+The plugin is built inside a server tree at the pinned commit
 (see [BUILD.md](BUILD.md), Repo layout). Two build trees are used:
 
 | Tree | Configuration | Purpose |
